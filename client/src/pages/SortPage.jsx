@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import FolderPicker from '@/components/FolderPicker'
 import ImagePreview from '@/components/ImagePreview'
 import ImageGrid from '@/components/ImageGrid'
+import LightboxModal from '@/components/LightboxModal'
 import SortingControls from '@/components/SortingControls'
 import ProgressBar from '@/components/ProgressBar'
 import useApi from '@/hooks/useApi'
@@ -33,6 +34,7 @@ const SortPage = () => {
   const { addToast } = useToastStore()
   const [format, setFormat] = useState('month-year')
   const [mode, setMode] = useState('copy')
+  const [lightboxSrc, setLightboxSrc] = useState(null)
 
   const currentImage = images[currentIndex]
   const total = images.length
@@ -325,8 +327,17 @@ const SortPage = () => {
           onPrevious={prevImage}
           currentIndex={currentIndex}
           totalCount={total}
+          onOpen={() => setLightboxSrc(currentImage)}
         />
-        <ImageGrid images={images} selectedIndex={currentIndex} onSelect={handleSelectImage} />
+        <ImageGrid
+          images={images}
+          selectedIndex={currentIndex}
+          onSelect={handleSelectImage}
+          onImageClick={(src, idx) => {
+            setCurrentIndex(idx)
+            setLightboxSrc(src)
+          }}
+        />
       </section>
 
       <SortingControls
@@ -347,6 +358,13 @@ const SortPage = () => {
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-200">
         {statusText}
       </div>
+
+      <LightboxModal
+        open={!!lightboxSrc}
+        src={lightboxSrc}
+        alt={lightboxSrc || ''}
+        onClose={() => setLightboxSrc(null)}
+      />
     </div>
   )
 }

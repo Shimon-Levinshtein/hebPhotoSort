@@ -1,19 +1,7 @@
 import { cn } from '@/lib/utils'
+import LazyImage from './LazyImage'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000'
-const toSrc = (val) => {
-  if (!val) return ''
-  if (
-    val.startsWith('http') ||
-    val.startsWith('data:') ||
-    val.startsWith('blob:')
-  ) {
-    return val
-  }
-  return `${API_BASE}/api/file?path=${encodeURIComponent(val)}`
-}
-
-const ImageGrid = ({ images = [], selectedIndex = 0, onSelect }) => {
+const ImageGrid = ({ images = [], selectedIndex = 0, onSelect, onImageClick }) => {
   if (!images.length) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-center text-slate-500">
@@ -30,7 +18,10 @@ const ImageGrid = ({ images = [], selectedIndex = 0, onSelect }) => {
           <button
             key={img}
             type="button"
-            onClick={() => onSelect?.(idx)}
+            onClick={() => {
+              onSelect?.(idx)
+              onImageClick?.(img, idx)
+            }}
             className={cn(
               'group relative aspect-square overflow-hidden rounded-md border transition',
               idx === selectedIndex
@@ -38,11 +29,12 @@ const ImageGrid = ({ images = [], selectedIndex = 0, onSelect }) => {
                 : 'border-slate-800 hover:border-slate-600',
             )}
           >
-            <img
-              src={toSrc(img)}
+            <LazyImage
+              src={img}
               alt={`thumb-${idx}`}
-              className="h-full w-full object-cover"
-              loading="lazy"
+              className="h-full w-full"
+              imgClassName="object-cover"
+              placeholderClassName="min-h-[72px]"
             />
             {idx === selectedIndex && (
               <span className="absolute inset-0 border-2 border-sky-500/70"></span>

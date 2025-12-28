@@ -1,3 +1,5 @@
+import LazyImage from './LazyImage'
+
 const DuplicatesView = ({
   groups,
   selectedPaths,
@@ -6,6 +8,7 @@ const DuplicatesView = ({
   relative,
   showPreview = false,
   apiBase = 'http://localhost:4000',
+  onOpenImage = () => {},
 }) => {
   if (!groups?.length) {
     return (
@@ -44,11 +47,13 @@ const DuplicatesView = ({
                     onChange={() => onToggle(file.path)}
                   />
                   {showPreview && (
-                    <img
+                    <LazyImage
                       src={`${apiBase}/api/file?path=${encodeURIComponent(file.path)}`}
                       alt={relative(file.path)}
-                      className="h-12 w-12 rounded object-cover border border-slate-800"
-                      loading="lazy"
+                      className="h-12 w-12 rounded border border-slate-800"
+                      imgClassName="object-cover cursor-zoom-in"
+                      placeholderClassName="h-12 w-12"
+                      onClick={() => onOpenImage(file.path)}
                     />
                   )}
                   <span className="font-mono text-slate-200">{relative(file.path)}</span>

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import FolderPicker from '@/components/FolderPicker'
 import DuplicatesView from '@/components/DuplicatesView'
+import LightboxModal from '@/components/LightboxModal'
 import useApi from '@/hooks/useApi'
 import { useAppStore } from '@/store/appStore'
 import { useToastStore } from '@/store/toastStore'
@@ -13,6 +14,7 @@ const DuplicatesPage = () => {
   const [duplicates, setDuplicates] = useState([])
   const [selectedDupPaths, setSelectedDupPaths] = useState(new Set())
   const [showPreview, setShowPreview] = useState(false)
+  const [lightboxSrc, setLightboxSrc] = useState(null)
 
   const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:4000'
 
@@ -198,9 +200,17 @@ const DuplicatesPage = () => {
             relative={relative}
             showPreview={showPreview}
             apiBase={apiBase}
+            onOpenImage={(src) => setLightboxSrc(src)}
           />
         </div>
       </div>
+
+      <LightboxModal
+        open={!!lightboxSrc}
+        src={lightboxSrc}
+        alt={lightboxSrc ? relative(lightboxSrc) : ''}
+        onClose={() => setLightboxSrc(null)}
+      />
     </div>
   )
 }

@@ -1,18 +1,6 @@
 import { ChevronLeft, ChevronRight, ZoomIn } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000'
-const toSrc = (val) => {
-  if (!val) return ''
-  if (
-    val.startsWith('http') ||
-    val.startsWith('data:') ||
-    val.startsWith('blob:')
-  ) {
-    return val
-  }
-  return `${API_BASE}/api/file?path=${encodeURIComponent(val)}`
-}
+import LazyImage from './LazyImage'
 
 const ImagePreview = ({
   src,
@@ -21,9 +9,9 @@ const ImagePreview = ({
   onPrevious,
   currentIndex = 0,
   totalCount = 0,
+  onOpen,
 }) => {
-  const displaySrc = toSrc(src)
-  const hasImage = Boolean(displaySrc)
+  const hasImage = Boolean(src)
 
   return (
     <div className="relative flex h-[360px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70 p-4">
@@ -37,11 +25,22 @@ const ImagePreview = ({
 
       <div className="relative mt-4 flex flex-1 items-center justify-center rounded-lg border border-dashed border-slate-800 bg-slate-950/60">
         {hasImage ? (
-          <img
-            src={displaySrc}
+          <LazyImage
+            src={src}
             alt={alt || 'preview'}
-            className="max-h-full max-w-full rounded-lg object-contain"
-            loading="lazy"
+            className="flex max-h-full max-w-full items-center justify-center rounded-lg"
+            imgClassName="max-h-full max-w-full object-contain cursor-zoom-in"
+            placeholderClassName="w-full h-full min-h-[240px]"
+            onClick={onOpen}
+            role={onOpen ? 'button' : undefined}
+            tabIndex={onOpen ? 0 : undefined}
+            onKeyDown={(e) => {
+              if (!onOpen) return
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onOpen()
+              }
+            }}
           />
         ) : (
           <div className="text-center text-slate-500">אין תמונה להצגה</div>
