@@ -16,7 +16,8 @@
     "@hebcal/core": "^6.0.6",
     "cors": "^2.8.5",
     "exif-parser": "^0.1.12",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
