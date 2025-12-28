@@ -1,0 +1,23 @@
+{
+  "appId": "com.hebphotosort.app",
+  "productName": "HebPhotoSort",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "electron/**/*",
+    "package.json",
+    "../client/dist/**/*"
+  ],
+  "extraMetadata": {
+    "main": "electron/main.js"
+  },
+  "asar": true,
+  "win": {
+    "target": ["nsis", "portable"],
+    "verifyUpdateCodeSignature": false,
+    "signAndEditExecutable": false
+  },
+  "publish": null
+}
+
