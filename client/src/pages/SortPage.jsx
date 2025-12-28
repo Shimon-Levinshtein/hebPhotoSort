@@ -245,50 +245,6 @@ const SortPage = () => {
         </div>
       )}
 
-      <section className="grid gap-4 sm:grid-cols-2">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <p className="text-sm text-slate-300">מצב פעולה</p>
-          <div className="mt-2 flex gap-3 text-sm">
-            {[
-              { value: 'move', label: 'העבר (ברירת מחדל)' },
-              { value: 'copy', label: 'העתק' },
-            ].map((opt) => (
-              <label key={opt.value} className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="mode"
-                  value={opt.value}
-                  checked={mode === opt.value}
-                  onChange={() => setMode(opt.value)}
-                />
-                {opt.label}
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <p className="text-sm text-slate-300">פורמט תאריך עברי</p>
-          <div className="mt-2 flex gap-3 text-sm">
-            {[
-              { value: 'month-year', label: 'חודש-שנה (כסלו תשפה)' },
-              { value: 'day-month-year', label: 'יום-חודש-שנה (כ״ד כסלו תשפה)' },
-            ].map((opt) => (
-              <label key={opt.value} className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="format"
-                  value={opt.value}
-                  checked={format === opt.value}
-                  onChange={() => setFormat(opt.value)}
-                />
-                {opt.label}
-              </label>
-            ))}
-          </div>
-        </div>
-      </section>
-
       <section className="grid gap-4 md:grid-cols-2">
         <FolderPicker
           label="תיקיית מקור"
