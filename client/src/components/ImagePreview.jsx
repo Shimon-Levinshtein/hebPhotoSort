@@ -11,12 +11,12 @@ const ImagePreview = ({
   totalCount = 0,
   onOpen,
 }) => {
-  const hasImage = Boolean(src)
+  const hasMedia = Boolean(src)
 
   return (
     <div className="relative flex h-[360px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70 p-4">
       <div className="flex items-center justify-between text-sm text-slate-300">
-        <span>תצוגה מקדימה</span>
+        <span>תצוגת מדיה</span>
         <span className="flex items-center gap-2">
           <ZoomIn className="h-4 w-4 text-sky-400" />
           {totalCount ? `${currentIndex + 1}/${totalCount}` : '0/0'}
@@ -24,7 +24,7 @@ const ImagePreview = ({
       </div>
 
       <div className="relative mt-4 flex flex-1 items-center justify-center rounded-lg border border-dashed border-slate-800 bg-slate-950/60">
-        {hasImage ? (
+        {hasMedia ? (
           <LazyImage
             src={src}
             alt={alt || 'preview'}
@@ -34,6 +34,8 @@ const ImagePreview = ({
             onClick={onOpen}
             role={onOpen ? 'button' : undefined}
             tabIndex={onOpen ? 0 : undefined}
+            videoControls
+            videoMuted={false}
             onKeyDown={(e) => {
               if (!onOpen) return
               if (e.key === 'Enter' || e.key === ' ') {
@@ -43,7 +45,7 @@ const ImagePreview = ({
             }}
           />
         ) : (
-          <div className="text-center text-slate-500">אין תמונה להצגה</div>
+          <div className="text-center text-slate-500">אין קובץ להצגה</div>
         )}
 
         <button

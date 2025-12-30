@@ -2,7 +2,9 @@
 
 ## 📌 מידע כללי על הפרויקט
 
-זהו פרויקט **אפליקציית ווב** למיון תמונות.
+> כלל עבודה: כל פיצ'ר/שינוי פונקציונלי יש לעדכן גם באפיון (docs/SPECIFICATION.md) ובמידת הצורך ב-README. פיצ'רי וידאו כוללים: streaming Range, פוסטר מ-ffmpeg-static, fallback קישור פתיחה/הורדה כשניגון לא נתמך.
+
+זהו פרויקט **אפליקציית ווב** למיון תמונות/וידאו.
 - **שפה**: JavaScript (לא TypeScript)
 - **פלטפורמה**: React (Frontend) + Node/Express (Backend)
 - **כיוון טקסט**: RTL (עברית)
@@ -36,6 +38,8 @@ Lucide React (אייקונים)
 clsx + tailwind-merge (class utilities)
 @hebcal/core (תאריך עברי)
 exif-parser (קריאת EXIF מתמונות)
+ffmpeg-static (חילוץ פריימים לוידאו לטובת פוסטר/HASH)
+mime-types (קביעת Content-Type לקבצי מדיה + Range)
 cors (API)
 ```
 

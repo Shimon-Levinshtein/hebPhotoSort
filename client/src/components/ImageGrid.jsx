@@ -5,14 +5,14 @@ const ImageGrid = ({ images = [], selectedIndex = 0, onSelect, onImageClick }) =
   if (!images.length) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-center text-slate-500">
-        אין תמונות להצגה
+        אין קבצי מדיה להצגה
       </div>
     )
   }
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-      <p className="mb-3 text-sm font-medium text-slate-200">גריד תמונות</p>
+      <p className="mb-3 text-sm font-medium text-slate-200">גריד מדיה</p>
       <div className="grid max-h-[220px] grid-cols-6 gap-2 overflow-auto p-1 sm:grid-cols-8">
         {images.map((img, idx) => (
           <button

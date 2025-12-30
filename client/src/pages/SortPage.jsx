@@ -48,8 +48,8 @@ const SortPage = () => {
 
   const statusText = useMemo(() => {
     if (!sourcePath || !destPath) return 'בחר תיקיות מקור ויעד כדי להתחיל'
-    if (!total) return 'אין תמונות להצגה'
-    return `תמונות: ${total} | נותרו: ${total - sortedCount}`
+    if (!total) return 'אין קבצי מדיה להצגה'
+    return `קבצי מדיה: ${total} | נותרו: ${total - sortedCount}`
   }, [sourcePath, destPath, total, sortedCount])
 
   const handleSelectImage = (idx) => setCurrentIndex(idx)
@@ -70,13 +70,13 @@ const SortPage = () => {
         } else {
           addToast({
             title: 'תיקיית מקור נבחרה',
-            description: `${chosen} (${res.count || 0} קבצים)`,
+            description: `${chosen} (${res.count || 0} קבצי מדיה נתמכים)`,
             variant: 'success',
           })
           if (!res.count) {
             addToast({
-              title: 'אין קבצי תמונה',
-              description: 'התיקייה שנבחרה ריקה או ללא תמונות נתמכות',
+              title: 'אין קבצי מדיה',
+              description: 'התיקייה שנבחרה ריקה או ללא תמונות/וידאו נתמכים',
               variant: 'error',
             })
           }
@@ -111,13 +111,13 @@ const SortPage = () => {
 
   const handleDelete = async () => {
     if (!currentImage) return
-    const ok = window.confirm('למחוק את התמונה? הפעולה בלתי הפיכה.')
+    const ok = window.confirm('למחוק את הקובץ? הפעולה בלתי הפיכה.')
     if (!ok) return
     try {
       await deleteFile(currentImage.replace('file://', ''))
       incrementSorted()
       removeCurrent()
-      addToast({ title: 'נמחק', description: 'התמונה הוסרה', variant: 'success' })
+      addToast({ title: 'נמחק', description: 'הקובץ הוסר', variant: 'success' })
     } catch (err) {
       addToast({ title: 'שגיאה במחיקה', description: err.message, variant: 'error' })
     }
@@ -208,7 +208,7 @@ const SortPage = () => {
     }
     setImages([])
     setCurrentIndex(0)
-    addToast({ title: 'מיון הסתיים', description: 'כל התמונות עובדו', variant: 'success' })
+    addToast({ title: 'מיון הסתיים', description: 'כל הקבצים עובדו', variant: 'success' })
   }
 
   const disableActions = loading || !sourcePath || !destPath || !images.length
@@ -225,7 +225,7 @@ const SortPage = () => {
       <header className="flex flex-col gap-2">
         <p className="text-sm font-medium text-sky-300">HebPhotoSort</p>
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-3xl font-semibold text-slate-50">מיון תמונות לפי תאריך עברי</h1>
+          <h1 className="text-3xl font-semibold text-slate-50">מיון תמונות/וידאו לפי תאריך עברי</h1>
           <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-200">
             מצב: {mode === 'copy' ? 'העתקה' : 'העברה'}
           </span>
@@ -234,8 +234,8 @@ const SortPage = () => {
           </span>
         </div>
         <p className="text-slate-300">
-          בחר תיקיות מקור/יעד (נתיב ידני), ראה גריד ותצוגה מקדימה, ונהל מיון אוטומטי/ידני מול API של
-          השרת.
+          בחר תיקיות מקור/יעד (נתיב ידני), ראה גריד ותצוגה מקדימה, ונהל מיון אוטומטי/ידני לתמונות או
+          סרטונים מול API של השרת.
         </p>
       </header>
 
@@ -265,7 +265,7 @@ const SortPage = () => {
       {stats && (
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-200">
           <div className="flex flex-wrap gap-4">
-            <span>סה״כ תמונות: {total + sortedCount}</span>
+              <span>סה״כ קבצי מדיה: {total + sortedCount}</span>
             <span>עוד לעיבוד: {stats.remaining}</span>
             <span>הושלמו: {sortedCount}</span>
             <span>אחוז התקדמות: {stats.pct}%</span>
@@ -278,7 +278,7 @@ const SortPage = () => {
       <section className="grid gap-4 lg:grid-cols-[1.2fr_0.9fr]">
         <ImagePreview
           src={currentImage}
-          alt="תמונה נוכחית"
+          alt="מדיה נוכחית"
           onNext={nextImage}
           onPrevious={prevImage}
           currentIndex={currentIndex}

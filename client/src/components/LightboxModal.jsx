@@ -3,13 +3,6 @@ import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import LazyImage from './LazyImage'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000'
-const toSrc = (val) => {
-  if (!val) return ''
-  if (val.startsWith('http') || val.startsWith('data:') || val.startsWith('blob:')) return val
-  return `${API_BASE}/api/file?path=${encodeURIComponent(val)}`
-}
-
 const LightboxModal = ({ open, src, alt, onClose }) => {
   useEffect(() => {
     if (!open) return undefined
@@ -21,7 +14,7 @@ const LightboxModal = ({ open, src, alt, onClose }) => {
   }, [open, onClose])
 
   if (!open) return null
-  const displaySrc = toSrc(src)
+  const hasSrc = Boolean(src)
 
   return (
     <div
@@ -44,16 +37,18 @@ const LightboxModal = ({ open, src, alt, onClose }) => {
           <X className="h-5 w-5" />
         </button>
 
-        {displaySrc ? (
+        {hasSrc ? (
           <LazyImage
-            src={displaySrc}
+            src={src}
             alt={alt || 'preview'}
             className="flex max-h-[80vh] max-w-full items-center justify-center bg-slate-950"
             imgClassName="max-h-[80vh] max-w-full object-contain"
             placeholderClassName="min-h-[320px] min-w-[320px]"
+            videoControls
+            videoMuted={false}
           />
         ) : (
-          <div className="p-10 text-center text-slate-300">אין תמונה להצגה</div>
+          <div className="p-10 text-center text-slate-300">אין מדיה להצגה</div>
         )}
 
         {alt && (

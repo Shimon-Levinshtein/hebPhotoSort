@@ -1,8 +1,12 @@
 import path from 'node:path'
+import os from 'node:os'
 import fs from 'node:fs/promises'
 import fssync from 'node:fs'
+import { spawn } from 'node:child_process'
+import crypto from 'node:crypto'
 import sharp from 'sharp'
-import { cleanPath, isImage } from './fileService.js'
+import ffmpegPath from 'ffmpeg-static'
+import { cleanPath, isImage, isVideo, isMedia } from './fileService.js'
 
 // פרמטרים להגדרת איכות / דיוק
 const HASH_WIDTH = 9
@@ -36,6 +40,7 @@ const popcountBuffer = (buf) => {
 }
 
 const hammingDistance = (aHex, bHex) => {
+  if (!aHex || !bHex) return Number.POSITIVE_INFINITY
   const a = Buffer.from(aHex, 'hex')
   const b = Buffer.from(bHex, 'hex')
   if (a.length !== b.length) return Number.POSITIVE_INFINITY
@@ -82,8 +87,8 @@ const bitsToHex = (bits) => {
 }
 
 // dHash: רגיש לשינויים חזותיים אבל מתעלם משם/קומפרסיה
-const computeDHash = async (filePath) => {
-  const base = sharp(filePath, { failOn: 'error' }).rotate()
+const computeDHashFromSource = async (sharpSource) => {
+  const base = sharpSource.rotate()
   const metadata = await base.metadata()
 
   const { data } = await base
@@ -109,6 +114,16 @@ const computeDHash = async (filePath) => {
   }
 }
 
+const computeDHash = async (filePath) => {
+  const sharpSource = sharp(filePath, { failOn: 'error' })
+  return computeDHashFromSource(sharpSource)
+}
+
+const computeDHashFromBuffer = async (buffer) => {
+  const sharpSource = sharp(buffer, { failOn: 'error' })
+  return computeDHashFromSource(sharpSource)
+}
+
 const similarSize = (a, b) => {
   const diff = Math.abs(a.size - b.size)
   const tolerance = Math.max(SIZE_TOLERANCE_BYTES, Math.min(a.size, b.size) * SIZE_TOLERANCE_RATIO)
@@ -120,6 +135,36 @@ const similarDimensions = (a, b) => {
   const widthGap = Math.abs(a.width - b.width) / Math.max(a.width, b.width)
   const heightGap = Math.abs(a.height - b.height) / Math.max(a.height, b.height)
   return widthGap <= DIM_TOLERANCE && heightGap <= DIM_TOLERANCE
+}
+
+const POSTER_DIR = path.join(os.tmpdir(), 'hebphotosort-posters')
+
+const ensurePosterDir = async () => {
+  await fs.mkdir(POSTER_DIR, { recursive: true })
+  return POSTER_DIR
+}
+
+const extractVideoFrame = async (filePath) => {
+  if (!ffmpegPath) return null
+  return new Promise((resolve, reject) => {
+    const args = ['-ss', '00:00:01', '-i', filePath, '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-']
+    const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+    const chunks = []
+    proc.stdout.on('data', (d) => chunks.push(d))
+    proc.on('error', reject)
+    proc.on('close', (code) => {
+      if (code === 0 && chunks.length) resolve(Buffer.concat(chunks))
+      else resolve(null) // fallback: no poster
+    })
+  })
+}
+
+const savePoster = async (buffer, sourcePath) => {
+  const dir = await ensurePosterDir()
+  const hash = crypto.createHash('md5').update(sourcePath).digest('hex')
+  const target = path.join(dir, `${hash}.jpg`)
+  await fs.writeFile(target, buffer)
+  return target
 }
 
 const findDuplicates = async (sourcePath) => {
@@ -142,12 +187,30 @@ const findDuplicates = async (sourcePath) => {
       const fullPath = path.join(current, entry.name)
       if (entry.isDirectory()) {
         stack.push(fullPath)
-      } else if (entry.isFile() && isImage(fullPath)) {
+      } else if (entry.isFile() && isMedia(fullPath)) {
         try {
           const fp = await limiter(async () => {
             const stat = await fs.stat(fullPath)
-            const dhash = await computeDHash(fullPath)
-            return { path: fullPath, size: stat.size, ...dhash }
+
+            if (isImage(fullPath)) {
+              const dhash = await computeDHash(fullPath)
+              return { path: fullPath, size: stat.size, type: 'image', ...dhash }
+            }
+
+            if (isVideo(fullPath)) {
+              const frame = await extractVideoFrame(fullPath)
+              const dhash = frame ? await computeDHashFromBuffer(frame) : null
+              const posterPath = frame ? await savePoster(frame, fullPath) : null
+              return {
+                path: fullPath,
+                size: stat.size,
+                type: 'video',
+                poster: posterPath,
+                ...(dhash || {}),
+              }
+            }
+
+            return null
           })
           if (fp) fingerprints.push(fp)
         } catch {

@@ -48,16 +48,21 @@ const DuplicatesView = ({
                   />
                   {showPreview && (
                     <LazyImage
-                      src={`${apiBase}/api/file?path=${encodeURIComponent(file.path)}`}
+                      src={`${apiBase}/api/file?path=${encodeURIComponent(file.poster || file.path)}`}
                       alt={relative(file.path)}
                       className="h-12 w-12 rounded border border-slate-800"
                       imgClassName="object-cover cursor-zoom-in"
                       placeholderClassName="h-12 w-12"
                       onClick={() => onOpenImage(file.path)}
+                      videoControls={false}
+                      videoMuted
+                      videoLoop
                     />
                   )}
                   <span className="font-mono text-slate-200">{relative(file.path)}</span>
-                  <span className="text-slate-500">({file.size} bytes)</span>
+                  <span className="text-slate-500">
+                    ({file.size} bytes{file.type ? ` · ${file.type}` : ''})
+                  </span>
                 </li>
               ))}
             </ul>

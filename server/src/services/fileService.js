@@ -5,22 +5,28 @@ import exif from 'exif-parser'
 import { HDate } from '@hebcal/core'
 
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'])
+const VIDEO_EXT = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'])
 
 const isImage = (filePath) => IMAGE_EXT.has(path.extname(filePath).toLowerCase())
+const isVideo = (filePath) => VIDEO_EXT.has(path.extname(filePath).toLowerCase())
+const isMedia = (filePath) => isImage(filePath) || isVideo(filePath)
 
-const getImageDate = async (filePath) => {
-  try {
-    const buf = await fs.readFile(filePath)
-    const parser = exif.create(buf)
-    const result = parser.parse()
-    const exifDate =
-      result.tags.DateTimeOriginal ||
-      result.tags.CreateDate ||
-      result.tags.ModifyDate ||
-      null
-    if (exifDate) return new Date(exifDate * 1000)
-  } catch {
-    // ignore and fallback
+const getMediaDate = async (filePath) => {
+  // For images, try EXIF first; for videos fall back to FS metadata.
+  if (isImage(filePath)) {
+    try {
+      const buf = await fs.readFile(filePath)
+      const parser = exif.create(buf)
+      const result = parser.parse()
+      const exifDate =
+        result.tags.DateTimeOriginal ||
+        result.tags.CreateDate ||
+        result.tags.ModifyDate ||
+        null
+      if (exifDate) return new Date(exifDate * 1000)
+    } catch {
+      // ignore and fallback to filesystem timestamps
+    }
   }
   const stat = await fs.stat(filePath)
   return stat.birthtime || stat.mtime
@@ -110,7 +116,7 @@ const scanFolder = async (sourcePath) => {
       const fullPath = path.join(current, entry.name)
       if (entry.isDirectory()) {
         stack.push(fullPath)
-      } else if (entry.isFile() && isImage(fullPath)) {
+      } else if (entry.isFile() && isMedia(fullPath)) {
         results.push(fullPath)
       }
     }
@@ -128,14 +134,14 @@ const createFolder = async (targetPath) => {
 }
 
 const readExif = async (targetPath) => {
-  const date = await getImageDate(targetPath)
+  const date = await getMediaDate(targetPath)
   const hebrew = toHebrewDate(date)
   return { date: date?.toISOString(), hebrew }
 }
 
 const sortFile = async ({ src, destRoot, format = 'month-year', mode = 'move' }) => {
-  if (!isImage(src)) throw new Error('Not an image')
-  const date = await getImageDate(src)
+  if (!isMedia(src)) throw new Error('Not an image or video')
+  const date = await getMediaDate(src)
   const hebrew = toHebrewDate(date)
   const targetDir = buildTargetPath(destRoot, hebrew, format)
   await fs.mkdir(targetDir, { recursive: true })
@@ -163,5 +169,7 @@ export {
   readExif,
   sortFile,
   isImage,
+  isVideo,
+  isMedia,
 }
 

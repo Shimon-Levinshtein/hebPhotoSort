@@ -2,6 +2,8 @@ import { Router } from 'express'
 import fssync from 'node:fs'
 import path from 'node:path'
 import { scanFolder, deleteFile, createFolder, readExif, sortFile, cleanPath } from '../services/fileService.js'
+import { getPosterPath } from '../services/posterService.js'
+import mime from 'mime-types'
 import duplicatesRouter from './duplicates.js'
 
 const router = Router()
@@ -76,7 +78,59 @@ router.get('/file', async (req, res) => {
     if (!fssync.existsSync(target)) return res.status(404).json({ error: 'File not found' })
     const stat = await fssync.promises.stat(target)
     if (!stat.isFile()) return res.status(400).json({ error: 'Not a file' })
-    return res.sendFile(path.resolve(target))
+
+    const range = req.headers.range
+    const mimeType = mime.lookup(target) || 'application/octet-stream'
+
+    if (range) {
+      const [startStr, endStr] = range.replace(/bytes=/, '').split('-')
+      const start = Number(startStr) || 0
+      const end = endStr ? Number(endStr) : stat.size - 1
+      if (start >= stat.size) {
+        res.status(416).setHeader('Content-Range', `bytes */${stat.size}`)
+        return res.end()
+      }
+      const chunkSize = end - start + 1
+
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunkSize,
+        'Content-Type': mimeType,
+      })
+      const stream = fssync.createReadStream(target, { start, end })
+      stream.pipe(res)
+      stream.on('error', (err) => {
+        res.status(500).end(err.message)
+      })
+      return
+    }
+
+    res.setHeader('Content-Type', mimeType)
+    res.setHeader('Content-Length', stat.size)
+    const stream = fssync.createReadStream(target)
+    stream.pipe(res)
+    stream.on('error', (err) => {
+      res.status(500).end(err.message)
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.get('/poster', async (req, res) => {
+  try {
+    const target = cleanPath(req.query.path)
+    if (!target) return res.status(400).json({ error: 'path is required' })
+    if (!fssync.existsSync(target)) return res.status(404).json({ error: 'File not found' })
+    const stat = await fssync.promises.stat(target)
+    if (!stat.isFile()) return res.status(400).json({ error: 'Not a file' })
+
+    const posterPath = await getPosterPath(target)
+    if (!posterPath || !fssync.existsSync(posterPath)) {
+      return res.status(404).json({ error: 'Poster not available' })
+    }
+    return res.sendFile(path.resolve(posterPath))
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
