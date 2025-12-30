@@ -29,18 +29,6 @@ const isVideoSrc = (val) => {
   return false
 }
 
-const guessMime = (src) => {
-  if (!src) return undefined
-  const clean = src.split('?')[0].toLowerCase()
-  if (clean.endsWith('.mp4')) return 'video/mp4'
-  if (clean.endsWith('.webm')) return 'video/webm'
-  if (clean.endsWith('.mov')) return 'video/quicktime'
-  if (clean.endsWith('.avi')) return 'video/x-msvideo'
-  if (clean.endsWith('.mkv')) return 'video/x-matroska'
-  if (clean.endsWith('.m4v')) return 'video/x-m4v'
-  return undefined
-}
-
 const LazyImage = ({
   src,
   alt,
@@ -57,11 +45,10 @@ const LazyImage = ({
   const [loaded, setLoaded] = useState(false)
   const [errored, setErrored] = useState(false)
   const [posterSrc, setPosterSrc] = useState(null)
-  const [triedPoster, setTriedPoster] = useState(false)
 
   const baseSrc = toSrc(src)
-  const isVideo = isVideoSrc(baseSrc)
-  const displaySrc = baseSrc
+  const displaySrc = posterSrc || baseSrc
+  const isVideo = !posterSrc && isVideoSrc(baseSrc)
 
   const commonClassName = cn(
     'h-full w-full object-cover transition duration-200',
@@ -78,38 +65,19 @@ const LazyImage = ({
         className,
       )}
     >
-      {isVideo && errored ? (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-xs text-slate-400">
-          <div>לא ניתן לנגן בדפדפן</div>
-          {posterSrc ? (
-            <img
-              src={posterSrc}
-              alt={alt || 'poster'}
-              className="h-24 w-24 rounded border border-slate-800 object-cover"
-            />
-          ) : null}
-          <a
-            href={baseSrc}
-            target="_blank"
-            rel="noreferrer"
-            className="rounded bg-slate-800 px-3 py-1 text-slate-100 hover:bg-slate-700"
-          >
-            פתח / הורד וידאו
-          </a>
-        </div>
-      ) : !errored && displaySrc ? (
+      {!errored && displaySrc ? (
         isVideo ? (
           <video
+            src={displaySrc}
             className={commonClassName}
             muted={videoMuted}
             loop={videoLoop}
             playsInline
             controls={videoControls}
-            poster={posterSrc || undefined}
             onLoadedData={() => setLoaded(true)}
             onError={() => {
-              if (!triedPoster) {
-                setTriedPoster(true)
+              // נסיון שני: אם וידאו נכשל, בקש פוסטר מהשרת
+              if (!posterSrc) {
                 setPosterSrc(`${API_BASE}/api/poster?path=${encodeURIComponent(src)}`)
                 setErrored(false)
                 setLoaded(false)
@@ -119,9 +87,7 @@ const LazyImage = ({
             }}
             onClick={onClick}
             {...props}
-          >
-            <source src={displaySrc} type={guessMime(displaySrc)} />
-          </video>
+          />
         ) : (
           <img
             src={displaySrc}

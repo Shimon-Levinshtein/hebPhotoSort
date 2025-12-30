@@ -2,7 +2,7 @@
 
 ## 📌 מידע כללי על הפרויקט
 
-> כלל עבודה: כל פיצ'ר/שינוי פונקציונלי יש לעדכן גם באפיון (docs/SPECIFICATION.md) ובמידת הצורך ב-README. פיצ'רי וידאו כוללים: streaming Range, פוסטר מ-ffmpeg-static, fallback קישור פתיחה/הורדה כשניגון לא נתמך.
+> כלל עבודה: כל פיצ'ר/שינוי פונקציונלי יש לעדכן גם באפיון (docs/SPECIFICATION.md) ובמידת הצורך ב-README.
 
 זהו פרויקט **אפליקציית ווב** למיון תמונות/וידאו.
 - **שפה**: JavaScript (לא TypeScript)
