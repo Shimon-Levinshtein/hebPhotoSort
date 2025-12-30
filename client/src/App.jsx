@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
 import SortPage from './pages/SortPage'
 import DuplicatesPage from './pages/DuplicatesPage'
+import FaceSearchPage from './pages/FaceSearchPage'
 import ToastContainer from '@/components/ToastContainer'
 import './index.css'
 
@@ -27,6 +28,7 @@ const App = () => (
           <div className="mt-4 space-y-2">
             {navItem('/sort', 'מיון תמונות')}
             {navItem('/duplicates', 'בדיקת כפילויות')}
+            {navItem('/faces', 'חיפוש לפי פנים')}
           </div>
         </aside>
 
@@ -35,6 +37,7 @@ const App = () => (
             <Route path="/" element={<Navigate to="/sort" replace />} />
             <Route path="/sort" element={<SortPage />} />
             <Route path="/duplicates" element={<DuplicatesPage />} />
+            <Route path="/faces" element={<FaceSearchPage />} />
             <Route path="*" element={<Navigate to="/sort" replace />} />
           </Routes>
         </section>

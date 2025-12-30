@@ -36,6 +36,7 @@ const useApi = () => {
   const createFolder = (targetPath) => request('/api/create-folder', { targetPath })
   const readExif = (targetPath) => request('/api/exif', { targetPath })
   const findDuplicates = (sourcePath) => request('/api/duplicates', { sourcePath })
+  const findFaces = (sourcePath) => request('/api/faces/scan', { sourcePath })
 
   return {
     scanFolder,
@@ -44,6 +45,7 @@ const useApi = () => {
     createFolder,
     readExif,
     findDuplicates,
+    findFaces,
     loading,
     error,
   }

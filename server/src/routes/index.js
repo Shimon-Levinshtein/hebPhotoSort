@@ -5,6 +5,7 @@ import { scanFolder, deleteFile, createFolder, readExif, sortFile, cleanPath } f
 import { getPosterPath } from '../services/posterService.js'
 import mime from 'mime-types'
 import duplicatesRouter from './duplicates.js'
+import facesRouter from './faces.js'
 
 const router = Router()
 
@@ -70,6 +71,7 @@ router.post('/sort', async (req, res) => {
 })
 
 router.use('/duplicates', duplicatesRouter)
+router.use('/faces', facesRouter)
 
 router.get('/file', async (req, res) => {
   try {
