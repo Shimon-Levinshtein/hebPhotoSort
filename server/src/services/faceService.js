@@ -248,7 +248,7 @@ const assignToClusters = (clusters, faceSample) => {
   })
 }
 
-const scanFaces = async (sourcePath) => {
+const scanFaces = async (sourcePath, onProgress = null) => {
   console.log('[faceService] scanFaces starting for:', sourcePath)
   
   const root = cleanPath(sourcePath)
@@ -260,24 +260,54 @@ const scanFaces = async (sourcePath) => {
   }
   await fs.access(root, fssync.constants.R_OK)
   
+  // Report: initializing
+  if (onProgress) onProgress({ phase: 'init', message: 'מאתחל זיהוי פנים...' })
+  
   console.log('[faceService] Initializing face-api...')
   const { faceapi: api } = await initFaceApi()
   faceapi = api
   console.log('[faceService] face-api initialized, faceapi:', typeof faceapi)
   console.log('[faceService] faceapi.nets:', Object.keys(faceapi?.nets || {}))
 
+  // Report: collecting files
+  if (onProgress) onProgress({ phase: 'collect', message: 'אוסף קבצי מדיה...' })
+  
   const mediaFiles = await collectMedia(root)
-  if (!mediaFiles.length) return { faces: [], totalFiles: 0, groupCount: 0 }
+  if (!mediaFiles.length) {
+    if (onProgress) onProgress({ phase: 'done', current: 0, total: 0, facesFound: 0 })
+    return { faces: [], totalFiles: 0, groupCount: 0 }
+  }
 
   const limiter = createLimiter(MAX_CONCURRENCY)
   const clusters = []
+  let processed = 0
+  const total = mediaFiles.length
+  
+  // Report: starting scan
+  if (onProgress) onProgress({ phase: 'scan', current: 0, total, facesFound: 0, message: 'מתחיל סריקה...' })
 
   for (const file of mediaFiles) {
     await limiter(async () => {
       const faces = await detectFacesInFile(file)
       faces.slice(0, MAX_SAMPLES).forEach((faceSample) => assignToClusters(clusters, faceSample))
+      
+      processed += 1
+      // Report progress every file
+      if (onProgress) {
+        onProgress({ 
+          phase: 'scan', 
+          current: processed, 
+          total, 
+          facesFound: clusters.length,
+          currentFile: path.basename(file),
+          message: `סורק ${processed}/${total}...`
+        })
+      }
     })
   }
+
+  // Report: processing results
+  if (onProgress) onProgress({ phase: 'process', message: 'מעבד תוצאות...' })
 
   const faces = clusters.map((cluster, idx) => {
     const paths = Array.from(cluster.paths).slice(0, MAX_RESULTS_PER_FACE)
@@ -293,11 +323,24 @@ const scanFaces = async (sourcePath) => {
 
   faces.sort((a, b) => b.count - a.count)
 
-  return {
+  const result = {
     faces,
     totalFiles: mediaFiles.length,
     groupCount: faces.length,
   }
+  
+  // Report: done
+  if (onProgress) {
+    onProgress({ 
+      phase: 'done', 
+      current: total, 
+      total, 
+      facesFound: faces.length,
+      message: 'הושלם!'
+    })
+  }
+
+  return result
 }
 
 export { scanFaces }

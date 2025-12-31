@@ -1,20 +1,24 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useCallback, useRef } from 'react'
 import FolderPicker from '@/components/FolderPicker'
 import LazyImage from '@/components/LazyImage'
 import LightboxModal from '@/components/LightboxModal'
-import useApi from '@/hooks/useApi'
 import { useAppStore } from '@/store/appStore'
 import { useToastStore } from '@/store/toastStore'
 
 const FaceSearchPage = () => {
   const { sourcePath, setSourcePath } = useAppStore()
-  const { findFaces, loading, error } = useApi()
   const { addToast } = useToastStore()
 
   const [faces, setFaces] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [filter, setFilter] = useState('')
   const [lightboxSrc, setLightboxSrc] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  
+  // Progress state
+  const [progress, setProgress] = useState(null)
+  const eventSourceRef = useRef(null)
 
   const filteredFaces = useMemo(() => {
     const term = filter.trim().toLowerCase()
@@ -34,7 +38,7 @@ const FaceSearchPage = () => {
     return /^[a-zA-Z]:[\\/]/.test(t) || t.startsWith('\\\\') || t.startsWith('/')
   }
 
-  const handleScan = async (pathOverride) => {
+  const handleScan = useCallback(async (pathOverride) => {
     const pathToScan = (pathOverride ?? sourcePath ?? '').trim()
     if (!pathToScan) {
       addToast({ title: 'בחר מקור', description: 'חסר נתיב מקור לסריקה', variant: 'error' })
@@ -48,26 +52,91 @@ const FaceSearchPage = () => {
       })
       return
     }
+    
     setSourcePath(pathToScan)
-    try {
-      const res = await findFaces(pathToScan)
-      const nextFaces = res.faces || []
-      setFaces(nextFaces)
-      setSelectedId(nextFaces[0]?.id ?? null)
-      if (!nextFaces.length) {
-        addToast({ title: 'לא נמצאו פנים', description: 'לא נמצאו קבצי מדיה זמינים', variant: 'error' })
-      } else {
-        addToast({
-          title: 'סריקת פנים הושלמה',
-          description: `${nextFaces.length} קבוצות · ${res.totalFiles || 0} קבצים`,
-          variant: 'success',
-        })
-      }
-    } catch (err) {
-      console.error('[FaceSearchPage] face scan failed', err)
-      addToast({ title: 'שגיאת סריקה', description: err.message, variant: 'error' })
+    setLoading(true)
+    setError(null)
+    setProgress({ phase: 'init', message: 'מתחבר...' })
+    
+    // Close any existing connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close()
     }
-  }
+    
+    return new Promise((resolve) => {
+      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000'
+      const url = `${apiBase}/api/faces/scan-stream?sourcePath=${encodeURIComponent(pathToScan)}`
+      
+      const eventSource = new EventSource(url)
+      eventSourceRef.current = eventSource
+      
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          setProgress(data)
+        } catch (e) {
+          console.error('[FaceSearchPage] Failed to parse progress:', e)
+        }
+      }
+      
+      eventSource.addEventListener('result', (event) => {
+        try {
+          const res = JSON.parse(event.data)
+          const nextFaces = res.faces || []
+          setFaces(nextFaces)
+          setSelectedId(nextFaces[0]?.id ?? null)
+          
+          if (!nextFaces.length) {
+            addToast({ title: 'לא נמצאו פנים', description: 'לא נמצאו קבצי מדיה זמינים', variant: 'error' })
+          } else {
+            addToast({
+              title: 'סריקת פנים הושלמה',
+              description: `${nextFaces.length} קבוצות · ${res.totalFiles || 0} קבצים`,
+              variant: 'success',
+            })
+          }
+        } catch (e) {
+          console.error('[FaceSearchPage] Failed to parse result:', e)
+        }
+      })
+      
+      eventSource.addEventListener('error', (event) => {
+        try {
+          if (event.data) {
+            const data = JSON.parse(event.data)
+            setError(data.error || 'שגיאה לא ידועה')
+            addToast({ title: 'שגיאת סריקה', description: data.error, variant: 'error' })
+          }
+        } catch (e) {
+          console.error('[FaceSearchPage] SSE error:', e)
+          setError('שגיאת חיבור')
+        }
+      })
+      
+      eventSource.addEventListener('close', () => {
+        eventSource.close()
+        eventSourceRef.current = null
+        setLoading(false)
+        setProgress(null)
+        resolve()
+      })
+      
+      eventSource.onerror = (err) => {
+        console.error('[FaceSearchPage] EventSource error:', err)
+        eventSource.close()
+        eventSourceRef.current = null
+        setLoading(false)
+        setProgress(null)
+        
+        // Only show error if we haven't received results yet
+        if (!faces.length) {
+          setError('שגיאת חיבור לשרת')
+          addToast({ title: 'שגיאת חיבור', description: 'לא ניתן להתחבר לשרת', variant: 'error' })
+        }
+        resolve()
+      }
+    })
+  }, [sourcePath, setSourcePath, addToast, faces.length])
 
   const handlePickSource = async () => {
     // העדפה: דיאלוג של Electron אם זמין
@@ -149,6 +218,34 @@ const FaceSearchPage = () => {
             />
           </div>
         </div>
+        
+        {/* Progress indicator */}
+        {loading && progress && (
+          <div className="mt-4 space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-slate-300">{progress.message || 'מעבד...'}</span>
+              {progress.current !== undefined && progress.total !== undefined && (
+                <span className="text-slate-400">
+                  {progress.current} / {progress.total} קבצים
+                  {progress.facesFound > 0 && ` · ${progress.facesFound} קבוצות פנים`}
+                </span>
+              )}
+            </div>
+            {progress.total > 0 && (
+              <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                <div
+                  className="h-full rounded-full bg-sky-500 transition-[width] duration-300"
+                  style={{ width: `${Math.min(100, Math.round((progress.current / progress.total) * 100))}%` }}
+                />
+              </div>
+            )}
+            {progress.currentFile && (
+              <div className="truncate text-xs text-slate-500" title={progress.currentFile}>
+                📄 {progress.currentFile}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
