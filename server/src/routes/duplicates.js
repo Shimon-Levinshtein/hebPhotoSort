@@ -10,6 +10,11 @@ duplicatesRouter.post('/', async (req, res) => {
     const groups = await findDuplicates(sourcePath)
     res.json({ groups, count: groups.length })
   } catch (err) {
+    console.error('[ROUTE /api/duplicates] failed', {
+      body: req.body,
+      error: err?.message,
+      stack: err?.stack,
+    })
     res.status(500).json({ error: err.message })
   }
 })

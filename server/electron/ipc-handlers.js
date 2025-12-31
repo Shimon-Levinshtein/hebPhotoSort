@@ -21,6 +21,7 @@ const getImageDate = async (filePath) => {
       null
     if (exifDate) return new Date(exifDate * 1000)
   } catch (err) {
+    console.error('[ipc] getImageDate failed, fallback to file stats', { filePath, error: err?.message })
     // ignore and fallback to file stats
   }
   const stat = await fs.stat(filePath)
@@ -83,6 +84,7 @@ ipcMain.handle('folder:scan', async (_event, folderPath) => {
       .filter((f) => isImage(f))
     return { files, count: files.length }
   } catch (err) {
+    console.error('[ipc] folder:scan failed', { folderPath, error: err?.message })
     return { files: [], count: 0, error: err.message }
   }
 })
@@ -94,6 +96,7 @@ ipcMain.handle('file:move', async (_event, src, dest) => {
     await fs.rename(src, dest)
     return { success: true, dest }
   } catch (err) {
+    console.error('[ipc] file:move failed', { src, dest, error: err?.message })
     return { success: false, error: err.message }
   }
 })
@@ -105,6 +108,7 @@ ipcMain.handle('file:copy', async (_event, src, dest) => {
     await fs.copyFile(src, dest)
     return { success: true, dest }
   } catch (err) {
+    console.error('[ipc] file:copy failed', { src, dest, error: err?.message })
     return { success: false, error: err.message }
   }
 })
@@ -115,6 +119,7 @@ ipcMain.handle('file:delete', async (_event, target) => {
     await fs.rm(target, { force: true })
     return { success: true }
   } catch (err) {
+    console.error('[ipc] file:delete failed', { target, error: err?.message })
     return { success: false, error: err.message }
   }
 })
@@ -125,6 +130,7 @@ ipcMain.handle('folder:create', async (_event, target) => {
     await fs.mkdir(target, { recursive: true })
     return { success: true }
   } catch (err) {
+    console.error('[ipc] folder:create failed', { target, error: err?.message })
     return { success: false, error: err.message }
   }
 })
@@ -137,6 +143,7 @@ ipcMain.handle('exif:read', async (_event, target) => {
     const date = await getImageDate(target)
     return { date: date?.toISOString() }
   } catch (err) {
+    console.error('[ipc] exif:read failed', { target, error: err?.message })
     return { error: err.message }
   }
 })
@@ -148,6 +155,7 @@ ipcMain.handle('date:to-hebrew', async (_event, isoDate) => {
     const hebrew = toHebrewDate(date)
     return { hebrew }
   } catch (err) {
+    console.error('[ipc] date:to-hebrew failed', { isoDate, error: err?.message })
     return { error: err.message }
   }
 })
@@ -178,6 +186,7 @@ ipcMain.handle('file:sort-by-date', async (_event, payload) => {
       date: date.toISOString(),
     }
   } catch (err) {
+    console.error('[ipc] file:sort-by-date failed', { payload, error: err?.message })
     return { success: false, error: err.message }
   }
 })

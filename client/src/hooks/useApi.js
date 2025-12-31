@@ -23,6 +23,7 @@ const useApi = () => {
       }
       return data
     } catch (err) {
+      console.error('[useApi] request failed', { path, error: err })
       setError(err.message || 'Request failed')
       throw err
     } finally {

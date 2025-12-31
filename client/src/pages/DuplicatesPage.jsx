@@ -76,6 +76,7 @@ const DuplicatesPage = () => {
         })
       }
     } catch (err) {
+      console.error('[DuplicatesPage] find duplicates failed', err)
       addToast({ title: 'שגיאה בסריקת כפילויות', description: err.message, variant: 'error' })
     }
   }
@@ -93,6 +94,7 @@ const DuplicatesPage = () => {
         await deleteFile(p)
         removed++
       } catch (err) {
+        console.error('[DuplicatesPage] delete duplicate failed', { path: p, error: err })
         addToast({ title: 'שגיאה במחיקה', description: `${p}: ${err.message}`, variant: 'error' })
       }
     }

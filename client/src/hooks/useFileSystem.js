@@ -17,6 +17,7 @@ const useFileSystem = () => {
       const result = await fn()
       return result
     } catch (err) {
+      console.error('[useFileSystem] electron call failed', err)
       setError(err.message || 'שגיאה לא ידועה')
       throw err
     } finally {

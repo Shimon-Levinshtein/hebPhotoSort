@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-    "lint": "echo \"no lint configured\""
+    "lint": "echo \"no lint configured\"",
+    "postinstall": "node scripts/patch-face-api.js",
+    "patch-face-api": "node scripts/patch-face-api.js"
   },
   "keywords": [],
   "author": "",

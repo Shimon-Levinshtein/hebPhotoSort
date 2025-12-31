@@ -83,6 +83,7 @@ const SortPage = () => {
         }
       }
     } catch (err) {
+      console.error('[SortPage] select source failed', err)
       addToast({ title: 'שגיאה בבחירת מקור', description: err.message, variant: 'error' })
     }
   }
@@ -99,6 +100,7 @@ const SortPage = () => {
         addToast({ title: 'תיקיית יעד נבחרה', description: chosen, variant: 'success' })
       }
     } catch (err) {
+      console.error('[SortPage] select destination failed', err)
       addToast({ title: 'שגיאה בבחירת יעד', description: err.message, variant: 'error' })
     }
   }
@@ -119,6 +121,7 @@ const SortPage = () => {
       removeCurrent()
       addToast({ title: 'נמחק', description: 'הקובץ הוסר', variant: 'success' })
     } catch (err) {
+      console.error('[SortPage] delete failed', err)
       addToast({ title: 'שגיאה במחיקה', description: err.message, variant: 'error' })
     }
   }

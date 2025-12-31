@@ -10,6 +10,14 @@ facesRouter.post('/scan', async (req, res) => {
     const result = await scanFaces(sourcePath)
     res.json(result)
   } catch (err) {
+    if (err?.code === 'ENOENT') {
+      return res.status(400).json({ error: err.message })
+    }
+    console.error('[ROUTE /api/faces/scan] failed', {
+      body: req.body,
+      error: err?.message,
+      stack: err?.stack,
+    })
     res.status(500).json({ error: err.message })
   }
 })

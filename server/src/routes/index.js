@@ -20,6 +20,11 @@ router.post('/scan', async (req, res) => {
     const result = await scanFolder(sourcePath)
     res.json(result)
   } catch (err) {
+    console.error('[ROUTE /api/scan] failed', {
+      body: req.body,
+      error: err?.message,
+      stack: err?.stack,
+    })
     res.status(500).json({ error: err.message })
   }
 })
@@ -31,6 +36,11 @@ router.post('/delete', async (req, res) => {
     await deleteFile(targetPath)
     res.json({ success: true })
   } catch (err) {
+    console.error('[ROUTE /api/delete] failed', {
+      body: req.body,
+      error: err?.message,
+      stack: err?.stack,
+    })
     res.status(500).json({ error: err.message })
   }
 })
@@ -42,6 +52,11 @@ router.post('/create-folder', async (req, res) => {
     await createFolder(targetPath)
     res.json({ success: true })
   } catch (err) {
+    console.error('[ROUTE /api/create-folder] failed', {
+      body: req.body,
+      error: err?.message,
+      stack: err?.stack,
+    })
     res.status(500).json({ error: err.message })
   }
 })
@@ -55,6 +70,11 @@ router.post('/exif', async (req, res) => {
     const data = await readExif(targetPath)
     res.json(data)
   } catch (err) {
+    console.error('[ROUTE /api/exif] failed', {
+      body: req.body,
+      error: err?.message,
+      stack: err?.stack,
+    })
     res.status(500).json({ error: err.message })
   }
 })
@@ -66,6 +86,11 @@ router.post('/sort', async (req, res) => {
     const result = await sortFile({ src, destRoot, format, mode })
     res.json(result)
   } catch (err) {
+    console.error('[ROUTE /api/sort] failed', {
+      body: req.body,
+      error: err?.message,
+      stack: err?.stack,
+    })
     res.status(500).json({ error: err.message })
   }
 })
@@ -116,6 +141,11 @@ router.get('/file', async (req, res) => {
       res.status(500).end(err.message)
     })
   } catch (err) {
+    console.error('[ROUTE /api/file] failed', {
+      query: req.query,
+      error: err?.message,
+      stack: err?.stack,
+    })
     res.status(500).json({ error: err.message })
   }
 })
@@ -134,6 +164,11 @@ router.get('/poster', async (req, res) => {
     }
     return res.sendFile(path.resolve(posterPath))
   } catch (err) {
+    console.error('[ROUTE /api/poster] failed', {
+      query: req.query,
+      error: err?.message,
+      stack: err?.stack,
+    })
     res.status(500).json({ error: err.message })
   }
 })

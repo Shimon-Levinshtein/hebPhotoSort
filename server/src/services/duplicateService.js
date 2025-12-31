@@ -66,6 +66,7 @@ const createLimiter = (limit = 4) => {
           const res = await fn()
           resolve(res)
         } catch (err) {
+          console.error('[duplicateService] limiter task failed', err)
           reject(err)
         } finally {
           active -= 1

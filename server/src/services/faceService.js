@@ -7,7 +7,10 @@ import { spawn } from 'node:child_process'
 import sharp from 'sharp'
 import ffmpegPath from 'ffmpeg-static'
 import { cleanPath, isImage, isVideo, isMedia } from './fileService.js'
-import { initFaceApi, faceapi, loadImage } from './faceModel.js'
+import { initFaceApi, loadImage, imageToCanvas, canvasToTensor } from './faceModel.js'
+
+// Will be set after initFaceApi
+let faceapi = null
 
 const THUMB_SIZE = 220
 const MAX_SAMPLES = 96
@@ -111,6 +114,7 @@ const createLimiter = (limit = 2) => {
           const res = await fn()
           resolve(res)
         } catch (err) {
+          console.error('[faceService] limiter task failed', err)
           reject(err)
         } finally {
           active -= 1
@@ -123,35 +127,86 @@ const createLimiter = (limit = 2) => {
 }
 
 const detectFacesInFile = async (filePath) => {
-  let imageInput = null
+  console.log('[faceService] detectFacesInFile:', filePath)
+  
+  let tensorInput = null
+  let canvas = null
   try {
+    let img = null
     if (isImage(filePath)) {
-      imageInput = await loadImage(filePath)
+      console.log('[faceService] Loading image...')
+      img = await loadImage(filePath)
+      console.log('[faceService] Image loaded:', {
+        width: img?.width,
+        height: img?.height,
+        type: typeof img,
+        constructor: img?.constructor?.name
+      })
     } else if (isVideo(filePath)) {
+      console.log('[faceService] Extracting video frame...')
       const frame = await extractVideoFrame(filePath)
-      if (frame) imageInput = await loadImage(frame)
+      if (frame) {
+        console.log('[faceService] Frame extracted, loading as image...')
+        img = await loadImage(frame)
+      }
     }
-  } catch {
+    
+    if (img) {
+      // Convert image to canvas then to tensor - face-api accepts tf.Tensor3D
+      console.log('[faceService] Converting image to canvas...')
+      canvas = imageToCanvas(img)
+      console.log('[faceService] Canvas created:', {
+        width: canvas?.width,
+        height: canvas?.height
+      })
+      
+      console.log('[faceService] Converting canvas to tensor...')
+      tensorInput = canvasToTensor(canvas)
+      console.log('[faceService] Tensor created')
+    }
+  } catch (err) {
+    console.error('[faceService] Failed to load image:', err.message, err.stack)
     return []
   }
 
-  if (!imageInput) return []
+  if (!tensorInput) {
+    console.log('[faceService] No tensor input, skipping')
+    return []
+  }
 
-  const detections = await faceapi
-    .detectAllFaces(imageInput, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
-    .withFaceLandmarks()
-    .withFaceDescriptors()
+  if (!faceapi) {
+    console.error('[faceService] faceapi not initialized!')
+    return []
+  }
 
-  if (!detections.length) return []
+  console.log('[faceService] Running face detection...')
+  console.log('[faceService] faceapi.SsdMobilenetv1Options:', typeof faceapi.SsdMobilenetv1Options)
+  
+  try {
+    const detections = await faceapi
+      .detectAllFaces(tensorInput, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+      .withFaceLandmarks()
+      .withFaceDescriptors()
 
-  const thumb = await buildThumb(filePath)
+    console.log('[faceService] Detection complete, found', detections.length, 'faces')
+    
+    // Clean up tensor to prevent memory leak
+    tensorInput.dispose()
+    
+    if (!detections.length) return []
 
-  return detections.map((det) => ({
-    descriptor: det.descriptor,
-    path: filePath,
-    box: det.detection?.box,
-    thumbnail: thumb || filePath,
-  }))
+    const thumb = await buildThumb(filePath)
+
+    return detections.map((det) => ({
+      descriptor: det.descriptor,
+      path: filePath,
+      box: det.detection?.box,
+      thumbnail: thumb || filePath,
+    }))
+  } catch (err) {
+    console.error('[faceService] Face detection failed:', err.message, err.stack)
+    return []
+  }
 }
 
 const assignToClusters = (clusters, faceSample) => {
@@ -194,9 +249,22 @@ const assignToClusters = (clusters, faceSample) => {
 }
 
 const scanFaces = async (sourcePath) => {
+  console.log('[faceService] scanFaces starting for:', sourcePath)
+  
   const root = cleanPath(sourcePath)
+  if (!root) throw new Error('sourcePath is required')
+  if (!fssync.existsSync(root)) {
+    const err = new Error(`Source path not found: ${root}`)
+    err.code = 'ENOENT'
+    throw err
+  }
   await fs.access(root, fssync.constants.R_OK)
-  await initFaceApi()
+  
+  console.log('[faceService] Initializing face-api...')
+  const { faceapi: api } = await initFaceApi()
+  faceapi = api
+  console.log('[faceService] face-api initialized, faceapi:', typeof faceapi)
+  console.log('[faceService] faceapi.nets:', Object.keys(faceapi?.nets || {}))
 
   const mediaFiles = await collectMedia(root)
   if (!mediaFiles.length) return { faces: [], totalFiles: 0, groupCount: 0 }

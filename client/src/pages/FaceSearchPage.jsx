@@ -27,10 +27,25 @@ const FaceSearchPage = () => {
     [faces, selectedId],
   )
 
+  const isAbsolutePath = (p) => {
+    if (!p) return false
+    const t = p.trim()
+    // Windows drive (C:\) or UNC (\\server\share) or POSIX-style absolute
+    return /^[a-zA-Z]:[\\/]/.test(t) || t.startsWith('\\\\') || t.startsWith('/')
+  }
+
   const handleScan = async (pathOverride) => {
     const pathToScan = (pathOverride ?? sourcePath ?? '').trim()
     if (!pathToScan) {
       addToast({ title: 'בחר מקור', description: 'חסר נתיב מקור לסריקה', variant: 'error' })
+      return
+    }
+    if (!isAbsolutePath(pathToScan)) {
+      addToast({
+        title: 'נתיב לא תקין',
+        description: 'יש להזין נתיב מלא (לדוגמה: C:\\Photos\\People או \\\\server\\share)',
+        variant: 'error',
+      })
       return
     }
     setSourcePath(pathToScan)
@@ -49,16 +64,32 @@ const FaceSearchPage = () => {
         })
       }
     } catch (err) {
+      console.error('[FaceSearchPage] face scan failed', err)
       addToast({ title: 'שגיאת סריקה', description: err.message, variant: 'error' })
     }
   }
 
   const handlePickSource = async () => {
+    // העדפה: דיאלוג של Electron אם זמין
+    try {
+      if (window.electronAPI?.openFolderDialog) {
+        const picked = await window.electronAPI.openFolderDialog()
+        if (picked) {
+          setSourcePath(picked)
+          await handleScan(picked)
+          return
+        }
+      }
+    } catch (err) {
+      console.error('[FaceSearchPage] electron folder dialog failed', err)
+    }
+
     const fromInput = (sourcePath || '').trim()
     if (fromInput) {
       await handleScan(fromInput)
       return
     }
+
     const chosenRaw = window.prompt('הכנס נתיב לתיקיית מקור (לדוגמה: C:\\Photos\\People)', sourcePath || '')
     const chosen = (chosenRaw || '').trim()
     if (chosen) {
