@@ -267,9 +267,9 @@ const FaceSearchPage = () => {
                       : 'border-slate-800 hover:border-slate-700'
                   }`}
                 >
-                  <div className="relative h-24 w-24 overflow-hidden rounded-full border border-slate-800">
+                  <div className="relative h-24 w-24 overflow-hidden rounded-full border-2 border-slate-700 bg-slate-800">
                     <LazyImage
-                      src={face.thumbnail || face.paths[0]}
+                      src={face.faceThumb || face.thumbnail || face.paths[0]}
                       alt={face.label}
                       className="h-full w-full"
                       imgClassName="h-full w-full object-cover"

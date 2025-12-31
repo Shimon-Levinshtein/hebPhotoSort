@@ -72,6 +72,59 @@ const buildThumb = async (filePath) => {
   return null
 }
 
+// Create a cropped face thumbnail from the image based on bounding box
+const FACE_THUMB_SIZE = 150
+const buildFaceThumb = async (filePath, box) => {
+  if (!box) return null
+  
+  try {
+    const dir = await ensureCacheDir()
+    // Create unique hash from file path and box coordinates
+    const boxId = `${Math.round(box.x)}_${Math.round(box.y)}_${Math.round(box.width)}_${Math.round(box.height)}`
+    const hash = crypto.createHash('md5').update(`${filePath}_face_${boxId}`).digest('hex')
+    const target = path.join(dir, `face_${hash}.jpg`)
+    
+    // Check if already exists
+    if (fssync.existsSync(target)) return target
+    
+    // Add padding around the face (20% on each side)
+    const padding = 0.3
+    const paddingX = box.width * padding
+    const paddingY = box.height * padding
+    
+    // Calculate crop region with padding
+    let left = Math.max(0, Math.round(box.x - paddingX))
+    let top = Math.max(0, Math.round(box.y - paddingY))
+    let width = Math.round(box.width + paddingX * 2)
+    let height = Math.round(box.height + paddingY * 2)
+    
+    // Get image metadata to ensure we don't go out of bounds
+    const metadata = await sharp(filePath).metadata()
+    
+    // Adjust for image rotation
+    const imgWidth = metadata.orientation >= 5 ? metadata.height : metadata.width
+    const imgHeight = metadata.orientation >= 5 ? metadata.width : metadata.height
+    
+    // Clamp to image bounds
+    if (left + width > imgWidth) width = imgWidth - left
+    if (top + height > imgHeight) height = imgHeight - top
+    
+    // Ensure minimum size
+    if (width < 10 || height < 10) return null
+    
+    await sharp(filePath)
+      .rotate() // Auto-rotate based on EXIF
+      .extract({ left, top, width, height })
+      .resize(FACE_THUMB_SIZE, FACE_THUMB_SIZE, { fit: 'cover' })
+      .toFile(target)
+    
+    return target
+  } catch (err) {
+    console.error('[faceService] buildFaceThumb failed:', err.message)
+    return null
+  }
+}
+
 const collectMedia = async (rootPath) => {
   const files = []
   const stack = [rootPath]
@@ -196,13 +249,23 @@ const detectFacesInFile = async (filePath) => {
     if (!detections.length) return []
 
     const thumb = await buildThumb(filePath)
-
-    return detections.map((det) => ({
-      descriptor: det.descriptor,
-      path: filePath,
-      box: det.detection?.box,
-      thumbnail: thumb || filePath,
-    }))
+    
+    // Create face thumbnails for each detected face
+    const results = []
+    for (const det of detections) {
+      const box = det.detection?.box
+      const faceThumb = await buildFaceThumb(filePath, box)
+      
+      results.push({
+        descriptor: det.descriptor,
+        path: filePath,
+        box,
+        thumbnail: thumb || filePath,
+        faceThumb: faceThumb || thumb || filePath, // Cropped face thumbnail
+      })
+    }
+    
+    return results
   } catch (err) {
     console.error('[faceService] Face detection failed:', err.message, err.stack)
     return []
@@ -227,6 +290,10 @@ const assignToClusters = (clusters, faceSample) => {
     cluster.descriptors.push(descriptor)
     cluster.paths.add(faceSample.path)
     cluster.sampleThumbnails.add(faceSample.thumbnail)
+    // Keep first face thumbnail as the group avatar
+    if (!cluster.faceThumb && faceSample.faceThumb) {
+      cluster.faceThumb = faceSample.faceThumb
+    }
     // עדכון צנטרואיד ממוצע
     const length = descriptor.length
     const sum = new Float32Array(length).map(() => 0)
@@ -245,6 +312,7 @@ const assignToClusters = (clusters, faceSample) => {
     descriptors: [descriptor],
     paths: new Set([faceSample.path]),
     sampleThumbnails: new Set([faceSample.thumbnail]),
+    faceThumb: faceSample.faceThumb, // Cropped face for group avatar
   })
 }
 
@@ -317,6 +385,7 @@ const scanFaces = async (sourcePath, onProgress = null) => {
       label: `פנים #${idx + 1}`,
       count: cluster.paths.size,
       thumbnail: thumb,
+      faceThumb: cluster.faceThumb || thumb, // Cropped face for avatar
       paths,
     }
   })
