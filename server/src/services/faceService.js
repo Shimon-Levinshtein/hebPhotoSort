@@ -439,11 +439,8 @@ const clustersToFaces = (clusters) => {
   return faces
 }
 
-const scanFaces = async (sourcePath, onProgress = null, abortSignal = null) => {
+const scanFaces = async (sourcePath, onProgress = null) => {
   console.log('[faceService] scanFaces starting for:', sourcePath)
-  
-  // Helper to check if scan was aborted
-  const isAborted = () => abortSignal?.aborted === true
   
   const root = cleanPath(sourcePath)
   if (!root) throw new Error('sourcePath is required')
@@ -538,26 +535,11 @@ const scanFaces = async (sourcePath, onProgress = null, abortSignal = null) => {
   // Track when to save cache (save every N files for efficiency)
   const CACHE_SAVE_INTERVAL = 5
   let lastCacheSave = 0
-  let wasAborted = false
 
   // Scan only new/modified files
   for (const file of toScan) {
-    // Check for abort before processing each file
-    if (isAborted()) {
-      console.log('[faceService] Scan aborted by client, saving cache and stopping...')
-      wasAborted = true
-      break
-    }
-    
     await limiter(async () => {
-      // Check again inside limiter (in case abort happened while waiting)
-      if (isAborted()) return
-      
       const faces = await detectFacesInFile(file)
-      
-      // Check after potentially long operation
-      if (isAborted()) return
-      
       const normalizedPath = file.replace(/\\/g, '/')
       const mtime = await getFileMtime(file)
       
@@ -590,7 +572,7 @@ const scanFaces = async (sourcePath, onProgress = null, abortSignal = null) => {
       }
       
       // Report progress every file with current faces
-      if (onProgress && !isAborted()) {
+      if (onProgress) {
         const currentFaces = clustersToFaces(clusters)
         onProgress({ 
           phase: 'scan', 
@@ -608,16 +590,9 @@ const scanFaces = async (sourcePath, onProgress = null, abortSignal = null) => {
     })
   }
 
-  // Always save cache (even if aborted) to preserve progress
-  if (!isAborted() && onProgress) onProgress({ phase: 'cache-save', message: 'שומר מטמון...' })
+  // Final cache save
+  if (onProgress) onProgress({ phase: 'cache-save', message: 'שומר מטמון...' })
   await saveFaceCache(root, { files: newCacheFiles })
-  
-  // If aborted, throw abort error
-  if (wasAborted || isAborted()) {
-    const abortError = new Error('Scan aborted')
-    abortError.name = 'AbortError'
-    throw abortError
-  }
 
   // Report: processing results
   if (onProgress) onProgress({ phase: 'process', message: 'מעבד תוצאות...' })

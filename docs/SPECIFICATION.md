@@ -24,8 +24,6 @@
 | File System | Node.js fs/path modules |
 | Hebrew Calendar | @hebcal/core |
 | EXIF Reading | exif-parser |
-| Face Detection | face-api.js + TensorFlow.js |
-| Image Processing | sharp |
 
 ### מבנה הפרויקט
 ```
@@ -49,7 +47,6 @@ hebPhotoSort/
 │   │   │   ├── utils.js
 │   │   ├── pages/
 │   │   │   ├── Home.jsx
-│   │   │   ├── FaceSearchPage.jsx
 │   │   │   └── Settings.jsx
 │   │   ├── store/
 │   │   │   └── appStore.js      # Zustand store
@@ -62,16 +59,7 @@ hebPhotoSort/
 │   ├── vite.config.js
 │   └── package.json
 ├── server/                    # Backend (Node/Express)
-│   ├── src/
-│   │   ├── index.js           # Entry point + Express setup
-│   │   ├── routes/
-│   │   │   ├── index.js       # Main routes (scan/sort/delete/create/exif)
-│   │   │   ├── faces.js       # Face search routes (SSE streaming)
-│   │   │   └── duplicates.js  # Duplicate detection routes
-│   │   └── services/
-│   │       ├── faceService.js # Face detection + clustering + caching
-│   │       ├── fileService.js # File operations
-│   │       └── posterService.js # Video poster generation
+│   ├── src/index.js           # API endpoints (scan/sort/delete/create/exif)
 │   └── package.json
 └── README.md
 ```
@@ -100,11 +88,6 @@ hebPhotoSort/
 
 ### Phase 3 - פיצ'רים מתקדמים
 - [x] זיהוי כפילויות (תמונות + וידאו): hash חזותי (dHash) לתמונות ולפריים מייצג בוידאו, כולל יצירת פוסטר לתצוגה
-- [x] **חיפוש לפי פנים**: זיהוי פנים וקיבוץ לפי אנשים (face-api.js)
-  - [x] עדכון JSON בזמן אמת - כל קובץ שמסתיים נשמר מיד
-  - [x] הצגה מיידית - פנים מוצגות במסך תוך כדי סריקה
-  - [x] עצירה והמשכה - ניתן לעצור באמצע והסריקה תמשיך מאותה נקודה
-  - [x] Cache חכם - קבצים שכבר נסרקו לא נסרקים שוב
 - [ ] מיון לפי מיקום (GPS מ-EXIF)
 - [ ] חיפוש וסינון לפי תאריך עברי
 - [ ] שמירת פרופילי מיון
@@ -158,32 +141,6 @@ hebPhotoSort/
 - **Typography**: פונט Heebo לעברית
 - **Direction**: RTL support מלא
 - **Animations**: Framer Motion לאנימציות חלקות
-
-### מסך חיפוש לפי פנים
-```
-┌─────────────────────────────────────────────────────────────┐
-│  📁 תיקיית מקור לפנים: [C:\Photos\Family    ] [בחר]        │
-├─────────────────────────────────────────────────────────────┤
-│  [⏹ עצור סריקה]  12 קבוצות · 45 תמונות    חיפוש: [____]   │
-│  ════════════════════════════════════ 75%                   │
-│  ⚡ 50 מהמטמון (כבר נסרקו)  🔍 25/100 חדשים                 │
-│  📄 IMG_1234.jpg                                            │
-│  💡 ניתן לעצור בכל רגע - הסריקה תמשיך מאותה נקודה          │
-├─────────────────────────────────────────────────────────────┤
-│  פרצופים (12 מוצגים)       │  תמונות לפי הפרצוף הנבחר      │
-│  ┌────┐ ┌────┐ ┌────┐      │  ┌──┐┌──┐┌──┐┌──┐┌──┐         │
-│  │ 👤 │ │ 👤 │ │ 👤 │      │  └──┘└──┘└──┘└──┘└──┘         │
-│  │#1  │ │#2  │ │#3  │      │  ┌──┐┌──┐┌──┐┌──┐┌──┐         │
-│  │45  │ │32  │ │28  │      │  └──┘└──┘└──┘└──┘└──┘         │
-│  └────┘ └────┘ └────┘      │                               │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**תכונות מרכזיות:**
-- **הצגה מיידית**: פנים מופיעות על המסך ברגע שהן מזוהות
-- **עצירה והמשכה**: כפתור עצירה + המשכה מהנקודה האחרונה
-- **מטמון חכם**: קבצים שנסרקו נשמרים ב-JSON, לא נסרקים שוב
-- **התקדמות מפורטת**: אחוזים, מספר קבצים מהמטמון, קבצים חדשים
 
 ---
 
@@ -241,43 +198,14 @@ hebPhotoSort/
 
 ### Endpoints
 
-| Method | Path | Body/Query | Description |
-|--------|------|------------|-------------|
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
 | POST | `/api/scan` | `{ sourcePath }` | סריקת תיקייה, החזרת רשימת תמונות ו-count |
 | POST | `/api/sort` | `{ src, destRoot, format, mode }` | מיון/העתקה לפי תאריך עברי, יצירת תיקיות יעד |
 | POST | `/api/delete` | `{ targetPath }` | מחיקת קובץ |
 | POST | `/api/create-folder` | `{ targetPath }` | יצירת תיקייה |
 | POST | `/api/exif` | `{ targetPath }` | קריאת תאריך EXIF והמרה לעברי |
-| GET  | `/api/faces/scan-stream` | `?sourcePath=...` | סריקת פנים עם SSE (עדכונים בזמן אמת) |
 | GET  | `/api/health` | - | בדיקת חיים |
-
-### Face Search SSE Events
-הסריקת פנים משתמשת ב-Server-Sent Events (SSE) לעדכונים בזמן אמת:
-
-| Event | Data | Description |
-|-------|------|-------------|
-| `message` | `{ phase, current, total, message, ... }` | עדכון התקדמות |
-| `faces` | `{ faces: [...], total, current }` | עדכון פנים שנמצאו (מיידי) |
-| `result` | `{ faces, totalFiles, cacheStats }` | תוצאה סופית |
-| `error` | `{ error, code }` | שגיאה |
-| `close` | `{}` | סיום החיבור |
-
-### Face Search Cache
-קובץ `.hebphotosort-faces.json` נשמר בתיקיית המקור ומכיל:
-```json
-{
-  "version": 1,
-  "lastScan": "2024-01-01T12:00:00.000Z",
-  "files": {
-    "path/to/image.jpg": {
-      "mtime": 1234567890,
-      "faces": [{ "descriptor": [...], "box": {...}, "thumbnail": "..." }]
-    }
-  }
-}
-```
-- **Resume**: הקובץ נשמר כל 5 קבצים, מאפשר המשכה מנקודת עצירה
-- **Cache Hit**: קבצים שלא השתנו (לפי mtime) נטענים מהמטמון
 
 ---
 

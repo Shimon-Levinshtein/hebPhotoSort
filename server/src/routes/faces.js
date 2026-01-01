@@ -38,19 +38,17 @@ facesRouter.get('/scan-stream', async (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no') // Disable nginx buffering
   res.flushHeaders()
   
-  // Create abort controller to stop scanning when client disconnects
-  const abortController = new AbortController()
-  
   // Track if client disconnected
+  let clientDisconnected = false
   req.on('close', () => {
-    console.log('[SSE] Client disconnected - aborting scan')
-    abortController.abort()
+    clientDisconnected = true
+    console.log('[SSE] Client disconnected')
   })
   
   // Send progress updates via SSE
   // If faces are included, send them as a separate 'faces' event for incremental display
   const sendProgress = (data) => {
-    if (abortController.signal.aborted) return
+    if (clientDisconnected) return
     
     // Send progress data (without faces to keep it light)
     const { faces, ...progressData } = data
@@ -63,10 +61,10 @@ facesRouter.get('/scan-stream', async (req, res) => {
   }
   
   try {
-    const result = await scanFaces(sourcePath, sendProgress, abortController.signal)
+    const result = await scanFaces(sourcePath, sendProgress)
     
-    if (abortController.signal.aborted) {
-      console.log('[SSE] Scan aborted by client disconnect')
+    if (clientDisconnected) {
+      console.log('[SSE] Scan completed but client already disconnected')
       return
     }
     
@@ -75,17 +73,13 @@ facesRouter.get('/scan-stream', async (req, res) => {
     res.write(`event: close\ndata: {}\n\n`)
     res.end()
   } catch (err) {
-    // Check if this was an abort
-    if (err.name === 'AbortError' || abortController.signal.aborted) {
-      console.log('[SSE] Scan was aborted')
-      return
-    }
-    
     console.error('[ROUTE /api/faces/scan-stream] failed', {
       sourcePath,
       error: err?.message,
       stack: err?.stack,
     })
+    
+    if (clientDisconnected) return
     
     // Send error via SSE
     res.write(`event: error\ndata: ${JSON.stringify({ error: err.message, code: err.code })}\n\n`)
