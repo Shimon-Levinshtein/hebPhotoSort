@@ -38,6 +38,21 @@ const FaceSearchPage = () => {
     return /^[a-zA-Z]:[\\/]/.test(t) || t.startsWith('\\\\') || t.startsWith('/')
   }
 
+  // Stop the current scan
+  const handleStop = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close()
+      eventSourceRef.current = null
+      setLoading(false)
+      setProgress(null)
+      addToast({ 
+        title: 'סריקה נעצרה', 
+        description: 'ניתן להמשיך מאותה נקודה בהפעלה הבאה',
+        variant: 'default' 
+      })
+    }
+  }, [addToast])
+
   const handleScan = useCallback(async (pathOverride) => {
     const pathToScan = (pathOverride ?? sourcePath ?? '').trim()
     if (!pathToScan) {
@@ -79,12 +94,26 @@ const FaceSearchPage = () => {
         }
       }
       
+      // Handle incremental face updates - display faces as they are found
+      eventSource.addEventListener('faces', (event) => {
+        try {
+          const { faces: newFaces } = JSON.parse(event.data)
+          if (newFaces && newFaces.length > 0) {
+            setFaces(newFaces)
+            // Auto-select first face if none selected
+            setSelectedId((prev) => prev || newFaces[0]?.id)
+          }
+        } catch (e) {
+          console.error('[FaceSearchPage] Failed to parse faces:', e)
+        }
+      })
+      
       eventSource.addEventListener('result', (event) => {
         try {
           const res = JSON.parse(event.data)
           const nextFaces = res.faces || []
           setFaces(nextFaces)
-          setSelectedId(nextFaces[0]?.id ?? null)
+          setSelectedId((prev) => prev || nextFaces[0]?.id)
           
           if (!nextFaces.length) {
             addToast({ title: 'לא נמצאו פנים', description: 'לא נמצאו קבצי מדיה זמינים', variant: 'error' })
@@ -199,14 +228,24 @@ const FaceSearchPage = () => {
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-300"
-            onClick={() => handleScan()}
-            disabled={loading || !sourcePath}
-          >
-            {loading ? 'סורק...' : 'סרוק פנים'}
-          </button>
+          {loading ? (
+            <button
+              type="button"
+              className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-500"
+              onClick={handleStop}
+            >
+              ⏹ עצור סריקה
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-300"
+              onClick={() => handleScan()}
+              disabled={!sourcePath}
+            >
+              {faces.length > 0 ? 'סרוק שוב (ימשיך מהנקודה שעצר)' : 'סרוק פנים'}
+            </button>
+          )}
           <div className="text-sm text-slate-300">
             {faces.length ? `${faces.length} קבוצות · ${selectedFace?.count || 0} תמונות לקבוצה הנבחרת` : 'טרם נסרק'}
           </div>
@@ -240,7 +279,7 @@ const FaceSearchPage = () => {
               <div className="flex flex-wrap gap-2 text-xs">
                 {progress.cached > 0 && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-900/50 px-2 py-0.5 text-emerald-300">
-                    ⚡ {progress.cached} מהמטמון
+                    ⚡ {progress.cached} מהמטמון (כבר נסרקו)
                   </span>
                 )}
                 {progress.toScan > 0 && (
@@ -263,6 +302,10 @@ const FaceSearchPage = () => {
                 📄 {progress.currentFile}
               </div>
             )}
+            {/* Resume hint */}
+            <div className="text-xs text-slate-500">
+              💡 ניתן לעצור בכל רגע - הסריקה תמשיך מאותה נקודה בהפעלה הבאה
+            </div>
           </div>
         )}
       </div>

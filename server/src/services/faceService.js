@@ -417,8 +417,33 @@ const assignToClusters = (clusters, faceSample) => {
   })
 }
 
-const scanFaces = async (sourcePath, onProgress = null) => {
+/**
+ * Convert clusters to face groups for display
+ * @param {Array} clusters - Current clusters
+ * @returns {Array} Face groups sorted by count
+ */
+const clustersToFaces = (clusters) => {
+  const faces = clusters.map((cluster, idx) => {
+    const paths = Array.from(cluster.paths).slice(0, MAX_RESULTS_PER_FACE)
+    const thumb = Array.from(cluster.sampleThumbnails)[0] || paths[0]
+    return {
+      id: `face-${idx + 1}`,
+      label: `פנים #${idx + 1}`,
+      count: cluster.paths.size,
+      thumbnail: thumb,
+      faceThumb: cluster.faceThumb || thumb,
+      paths,
+    }
+  })
+  faces.sort((a, b) => b.count - a.count)
+  return faces
+}
+
+const scanFaces = async (sourcePath, onProgress = null, abortSignal = null) => {
   console.log('[faceService] scanFaces starting for:', sourcePath)
+  
+  // Helper to check if scan was aborted
+  const isAborted = () => abortSignal?.aborted === true
   
   const root = cleanPath(sourcePath)
   if (!root) throw new Error('sourcePath is required')
@@ -443,7 +468,7 @@ const scanFaces = async (sourcePath, onProgress = null) => {
   
   const mediaFiles = await collectMedia(root)
   if (!mediaFiles.length) {
-    if (onProgress) onProgress({ phase: 'done', current: 0, total: 0, facesFound: 0 })
+    if (onProgress) onProgress({ phase: 'done', current: 0, total: 0, facesFound: 0, faces: [] })
     return { faces: [], totalFiles: 0, groupCount: 0 }
   }
 
@@ -454,8 +479,8 @@ const scanFaces = async (sourcePath, onProgress = null) => {
   
   console.log(`[faceService] Cache analysis: ${cached.length} cached, ${toScan.length} to scan, ${removed.length} removed`)
   
-  // Prepare new cache object
-  const newCacheFiles = {}
+  // Prepare new cache object - start with existing cache data
+  const newCacheFiles = existingCache?.files ? { ...existingCache.files } : {}
   
   // Process cached files - restore their face data from cache
   const clusters = []
@@ -484,11 +509,9 @@ const scanFaces = async (sourcePath, onProgress = null) => {
   const totalToScan = toScan.length
   const totalFiles = mediaFiles.length
   
-  // Report: starting scan (show what's cached vs new)
-  if (onProgress) {
-    const cacheMsg = cached.length > 0 
-      ? `נמצאו ${cached.length} קבצים במטמון, סורק ${totalToScan} חדשים...`
-      : 'מתחיל סריקה...'
+  // Send initial faces from cache immediately
+  if (onProgress && cached.length > 0) {
+    const initialFaces = clustersToFaces(clusters)
     onProgress({ 
       phase: 'scan', 
       current: cached.length, 
@@ -496,14 +519,45 @@ const scanFaces = async (sourcePath, onProgress = null) => {
       facesFound: clusters.length,
       cached: cached.length,
       toScan: totalToScan,
-      message: cacheMsg
+      message: `נמצאו ${cached.length} קבצים במטמון, סורק ${totalToScan} חדשים...`,
+      faces: initialFaces // Send faces from cache immediately
+    })
+  } else if (onProgress) {
+    onProgress({ 
+      phase: 'scan', 
+      current: 0, 
+      total: totalFiles, 
+      facesFound: 0,
+      cached: 0,
+      toScan: totalToScan,
+      message: 'מתחיל סריקה...',
+      faces: []
     })
   }
 
+  // Track when to save cache (save every N files for efficiency)
+  const CACHE_SAVE_INTERVAL = 5
+  let lastCacheSave = 0
+  let wasAborted = false
+
   // Scan only new/modified files
   for (const file of toScan) {
+    // Check for abort before processing each file
+    if (isAborted()) {
+      console.log('[faceService] Scan aborted by client, saving cache and stopping...')
+      wasAborted = true
+      break
+    }
+    
     await limiter(async () => {
+      // Check again inside limiter (in case abort happened while waiting)
+      if (isAborted()) return
+      
       const faces = await detectFacesInFile(file)
+      
+      // Check after potentially long operation
+      if (isAborted()) return
+      
       const normalizedPath = file.replace(/\\/g, '/')
       const mtime = await getFileMtime(file)
       
@@ -527,8 +581,17 @@ const scanFaces = async (sourcePath, onProgress = null) => {
       faces.slice(0, MAX_SAMPLES).forEach((faceSample) => assignToClusters(clusters, faceSample))
       
       processed += 1
-      // Report progress every file
-      if (onProgress) {
+      
+      // Save cache periodically (every CACHE_SAVE_INTERVAL files) for resume capability
+      if (processed - lastCacheSave >= CACHE_SAVE_INTERVAL) {
+        await saveFaceCache(root, { files: newCacheFiles })
+        lastCacheSave = processed
+        console.log(`[faceService] Cache saved at ${processed}/${totalToScan} files`)
+      }
+      
+      // Report progress every file with current faces
+      if (onProgress && !isAborted()) {
+        const currentFaces = clustersToFaces(clusters)
         onProgress({ 
           phase: 'scan', 
           current: cached.length + processed, 
@@ -538,38 +601,33 @@ const scanFaces = async (sourcePath, onProgress = null) => {
           scanned: processed,
           toScan: totalToScan,
           currentFile: path.basename(file),
-          message: `סורק ${processed}/${totalToScan} קבצים חדשים...`
+          message: `סורק ${processed}/${totalToScan} קבצים חדשים...`,
+          faces: currentFaces // Send updated faces with each progress update
         })
       }
     })
   }
 
-  // Save updated cache
-  if (onProgress) onProgress({ phase: 'cache-save', message: 'שומר מטמון...' })
+  // Always save cache (even if aborted) to preserve progress
+  if (!isAborted() && onProgress) onProgress({ phase: 'cache-save', message: 'שומר מטמון...' })
   await saveFaceCache(root, { files: newCacheFiles })
+  
+  // If aborted, throw abort error
+  if (wasAborted || isAborted()) {
+    const abortError = new Error('Scan aborted')
+    abortError.name = 'AbortError'
+    throw abortError
+  }
 
   // Report: processing results
   if (onProgress) onProgress({ phase: 'process', message: 'מעבד תוצאות...' })
 
-  const faces = clusters.map((cluster, idx) => {
-    const paths = Array.from(cluster.paths).slice(0, MAX_RESULTS_PER_FACE)
-    const thumb = Array.from(cluster.sampleThumbnails)[0] || paths[0]
-    return {
-      id: `face-${idx + 1}`,
-      label: `פנים #${idx + 1}`,
-      count: cluster.paths.size,
-      thumbnail: thumb,
-      faceThumb: cluster.faceThumb || thumb, // Cropped face for avatar
-      paths,
-    }
-  })
-
-  faces.sort((a, b) => b.count - a.count)
+  const finalFaces = clustersToFaces(clusters)
 
   const result = {
-    faces,
+    faces: finalFaces,
     totalFiles: mediaFiles.length,
-    groupCount: faces.length,
+    groupCount: finalFaces.length,
     cacheStats: {
       cached: cached.length,
       scanned: toScan.length,
@@ -586,10 +644,11 @@ const scanFaces = async (sourcePath, onProgress = null) => {
       phase: 'done', 
       current: totalFiles, 
       total: totalFiles, 
-      facesFound: faces.length,
+      facesFound: finalFaces.length,
       cached: cached.length,
       scanned: toScan.length,
-      message: doneMsg
+      message: doneMsg,
+      faces: finalFaces
     })
   }
 
