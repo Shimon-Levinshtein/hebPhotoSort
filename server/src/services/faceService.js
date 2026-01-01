@@ -17,8 +17,109 @@ const MAX_SAMPLES = 96
 const MAX_RESULTS_PER_FACE = 96
 const FACE_DISTANCE_THRESHOLD = 0.52
 const MAX_CONCURRENCY = 2
+const CACHE_VERSION = 1
+const CACHE_FILENAME = '.hebphotosort-faces.json'
 
 const CACHE_DIR = path.join(os.tmpdir(), 'hebphotosort-faces')
+
+// ============= Cache Functions =============
+
+/**
+ * Load cache file from the scanned directory
+ * @param {string} rootPath - Root directory being scanned
+ * @returns {object|null} Cache data or null if not exists/invalid
+ */
+const loadFaceCache = async (rootPath) => {
+  const cachePath = path.join(rootPath, CACHE_FILENAME)
+  try {
+    if (!fssync.existsSync(cachePath)) return null
+    const raw = await fs.readFile(cachePath, 'utf-8')
+    const cache = JSON.parse(raw)
+    
+    // Validate cache version
+    if (cache.version !== CACHE_VERSION) {
+      console.log('[faceService] Cache version mismatch, will rescan all')
+      return null
+    }
+    
+    console.log(`[faceService] Loaded cache with ${Object.keys(cache.files || {}).length} files`)
+    return cache
+  } catch (err) {
+    console.error('[faceService] Failed to load cache:', err.message)
+    return null
+  }
+}
+
+/**
+ * Save cache file to the scanned directory
+ * @param {string} rootPath - Root directory being scanned
+ * @param {object} cacheData - Cache data to save
+ */
+const saveFaceCache = async (rootPath, cacheData) => {
+  const cachePath = path.join(rootPath, CACHE_FILENAME)
+  try {
+    const data = {
+      version: CACHE_VERSION,
+      lastScan: new Date().toISOString(),
+      files: cacheData.files || {}
+    }
+    await fs.writeFile(cachePath, JSON.stringify(data, null, 2), 'utf-8')
+    console.log(`[faceService] Cache saved with ${Object.keys(data.files).length} files`)
+  } catch (err) {
+    console.error('[faceService] Failed to save cache:', err.message)
+  }
+}
+
+/**
+ * Get file modification time in milliseconds
+ * @param {string} filePath 
+ * @returns {number} mtime in ms
+ */
+const getFileMtime = async (filePath) => {
+  try {
+    const stat = await fs.stat(filePath)
+    return stat.mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Categorize files into: cached (unchanged), new, modified
+ * @param {string[]} mediaFiles - All media files found
+ * @param {object} cache - Existing cache data
+ * @returns {{cached: object[], toScan: string[], removed: string[]}}
+ */
+const categorizeFiles = async (mediaFiles, cache) => {
+  const cached = [] // Files that are in cache and unchanged
+  const toScan = [] // New or modified files
+  const cachedPaths = new Set(Object.keys(cache?.files || {}))
+  
+  for (const file of mediaFiles) {
+    const normalizedPath = file.replace(/\\/g, '/')
+    const cachedEntry = cache?.files?.[normalizedPath]
+    
+    if (cachedEntry) {
+      const currentMtime = await getFileMtime(file)
+      if (currentMtime === cachedEntry.mtime) {
+        // File unchanged, use cache
+        cached.push({ path: file, data: cachedEntry })
+      } else {
+        // File modified, rescan
+        toScan.push(file)
+      }
+      cachedPaths.delete(normalizedPath)
+    } else {
+      // New file
+      toScan.push(file)
+    }
+  }
+  
+  // Files in cache but no longer exist
+  const removed = Array.from(cachedPaths)
+  
+  return { cached, toScan, removed }
+}
 
 const ensureCacheDir = async () => {
   await fs.mkdir(CACHE_DIR, { recursive: true })
@@ -346,17 +447,83 @@ const scanFaces = async (sourcePath, onProgress = null) => {
     return { faces: [], totalFiles: 0, groupCount: 0 }
   }
 
-  const limiter = createLimiter(MAX_CONCURRENCY)
-  const clusters = []
-  let processed = 0
-  const total = mediaFiles.length
+  // Load existing cache
+  if (onProgress) onProgress({ phase: 'cache', message: 'בודק מטמון...' })
+  const existingCache = await loadFaceCache(root)
+  const { cached, toScan, removed } = await categorizeFiles(mediaFiles, existingCache)
   
-  // Report: starting scan
-  if (onProgress) onProgress({ phase: 'scan', current: 0, total, facesFound: 0, message: 'מתחיל סריקה...' })
+  console.log(`[faceService] Cache analysis: ${cached.length} cached, ${toScan.length} to scan, ${removed.length} removed`)
+  
+  // Prepare new cache object
+  const newCacheFiles = {}
+  
+  // Process cached files - restore their face data from cache
+  const clusters = []
+  for (const { path: filePath, data } of cached) {
+    const normalizedPath = filePath.replace(/\\/g, '/')
+    newCacheFiles[normalizedPath] = data
+    
+    // Reconstruct face samples from cached data
+    if (data.faces && data.faces.length > 0) {
+      for (const cachedFace of data.faces) {
+        // Convert descriptor array back to Float32Array
+        const faceSample = {
+          descriptor: Float32Array.from(cachedFace.descriptor),
+          path: filePath,
+          box: cachedFace.box,
+          thumbnail: cachedFace.thumbnail,
+          faceThumb: cachedFace.faceThumb
+        }
+        assignToClusters(clusters, faceSample)
+      }
+    }
+  }
 
-  for (const file of mediaFiles) {
+  const limiter = createLimiter(MAX_CONCURRENCY)
+  let processed = 0
+  const totalToScan = toScan.length
+  const totalFiles = mediaFiles.length
+  
+  // Report: starting scan (show what's cached vs new)
+  if (onProgress) {
+    const cacheMsg = cached.length > 0 
+      ? `נמצאו ${cached.length} קבצים במטמון, סורק ${totalToScan} חדשים...`
+      : 'מתחיל סריקה...'
+    onProgress({ 
+      phase: 'scan', 
+      current: cached.length, 
+      total: totalFiles, 
+      facesFound: clusters.length,
+      cached: cached.length,
+      toScan: totalToScan,
+      message: cacheMsg
+    })
+  }
+
+  // Scan only new/modified files
+  for (const file of toScan) {
     await limiter(async () => {
       const faces = await detectFacesInFile(file)
+      const normalizedPath = file.replace(/\\/g, '/')
+      const mtime = await getFileMtime(file)
+      
+      // Store in cache (convert Float32Array to regular array for JSON)
+      newCacheFiles[normalizedPath] = {
+        mtime,
+        faces: faces.slice(0, MAX_SAMPLES).map(f => ({
+          descriptor: Array.from(f.descriptor),
+          box: f.box ? {
+            x: f.box.x,
+            y: f.box.y,
+            width: f.box.width,
+            height: f.box.height
+          } : null,
+          thumbnail: f.thumbnail,
+          faceThumb: f.faceThumb
+        }))
+      }
+      
+      // Add to clusters
       faces.slice(0, MAX_SAMPLES).forEach((faceSample) => assignToClusters(clusters, faceSample))
       
       processed += 1
@@ -364,15 +531,22 @@ const scanFaces = async (sourcePath, onProgress = null) => {
       if (onProgress) {
         onProgress({ 
           phase: 'scan', 
-          current: processed, 
-          total, 
+          current: cached.length + processed, 
+          total: totalFiles, 
           facesFound: clusters.length,
+          cached: cached.length,
+          scanned: processed,
+          toScan: totalToScan,
           currentFile: path.basename(file),
-          message: `סורק ${processed}/${total}...`
+          message: `סורק ${processed}/${totalToScan} קבצים חדשים...`
         })
       }
     })
   }
+
+  // Save updated cache
+  if (onProgress) onProgress({ phase: 'cache-save', message: 'שומר מטמון...' })
+  await saveFaceCache(root, { files: newCacheFiles })
 
   // Report: processing results
   if (onProgress) onProgress({ phase: 'process', message: 'מעבד תוצאות...' })
@@ -396,16 +570,26 @@ const scanFaces = async (sourcePath, onProgress = null) => {
     faces,
     totalFiles: mediaFiles.length,
     groupCount: faces.length,
+    cacheStats: {
+      cached: cached.length,
+      scanned: toScan.length,
+      removed: removed.length
+    }
   }
   
   // Report: done
   if (onProgress) {
+    const doneMsg = cached.length > 0 
+      ? `הושלם! (${cached.length} מהמטמון, ${toScan.length} חדשים)`
+      : 'הושלם!'
     onProgress({ 
       phase: 'done', 
-      current: total, 
-      total, 
+      current: totalFiles, 
+      total: totalFiles, 
       facesFound: faces.length,
-      message: 'הושלם!'
+      cached: cached.length,
+      scanned: toScan.length,
+      message: doneMsg
     })
   }
 

@@ -89,9 +89,13 @@ const FaceSearchPage = () => {
           if (!nextFaces.length) {
             addToast({ title: 'לא נמצאו פנים', description: 'לא נמצאו קבצי מדיה זמינים', variant: 'error' })
           } else {
+            // Show cache stats in toast if available
+            const cacheInfo = res.cacheStats?.cached > 0 
+              ? ` (${res.cacheStats.cached} מהמטמון)` 
+              : ''
             addToast({
               title: 'סריקת פנים הושלמה',
-              description: `${nextFaces.length} קבוצות · ${res.totalFiles || 0} קבצים`,
+              description: `${nextFaces.length} קבוצות · ${res.totalFiles || 0} קבצים${cacheInfo}`,
               variant: 'success',
             })
           }
@@ -231,6 +235,21 @@ const FaceSearchPage = () => {
                 </span>
               )}
             </div>
+            {/* Cache status badges */}
+            {(progress.cached > 0 || progress.toScan > 0) && (
+              <div className="flex flex-wrap gap-2 text-xs">
+                {progress.cached > 0 && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-900/50 px-2 py-0.5 text-emerald-300">
+                    ⚡ {progress.cached} מהמטמון
+                  </span>
+                )}
+                {progress.toScan > 0 && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-900/50 px-2 py-0.5 text-amber-300">
+                    🔍 {progress.scanned || 0}/{progress.toScan} חדשים
+                  </span>
+                )}
+              </div>
+            )}
             {progress.total > 0 && (
               <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
                 <div
