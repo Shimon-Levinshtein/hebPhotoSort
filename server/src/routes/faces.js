@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { scanFaces } from '../services/faceService.js'
+import { scanFaces, getScanHistory } from '../services/faceService.js'
 import logger from '../utils/logger.js'
 
 const facesRouter = Router()
@@ -93,6 +93,27 @@ facesRouter.get('/scan-stream', async (req, res) => {
     // Send error via SSE
     res.write(`event: error\ndata: ${JSON.stringify({ error: err.message, code: err.code })}\n\n`)
     res.end()
+  }
+})
+
+// Get scan history for a directory
+facesRouter.get('/history', async (req, res) => {
+  try {
+    const { sourcePath } = req.query
+    if (!sourcePath) return res.status(400).json({ error: 'sourcePath is required' })
+    
+    const history = await getScanHistory(sourcePath)
+    res.json(history)
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      return res.status(400).json({ error: err.message })
+    }
+    logger.error('[ROUTE /api/faces/history] failed', {
+      query: req.query,
+      error: err?.message,
+      stack: err?.stack,
+    })
+    res.status(500).json({ error: err.message })
   }
 })
 

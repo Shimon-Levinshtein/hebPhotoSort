@@ -6,6 +6,7 @@ import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import sharp from 'sharp'
 import ffmpegPath from 'ffmpeg-static'
+import exif from 'exif-parser'
 import { cleanPath, isImage, isVideo, isMedia } from './fileService.js'
 import { initFaceApi, loadImage, imageToCanvas, canvasToTensor } from './faceModel.js'
 import logger from '../utils/logger.js'
@@ -22,6 +23,567 @@ const CACHE_VERSION = 1
 const CACHE_FILENAME = '.hebphotosort-faces.json'
 
 const CACHE_DIR = path.join(os.tmpdir(), 'hebphotosort-faces')
+
+/**
+ * Detect if file was likely sent/received via WhatsApp
+ * @param {string} filePath 
+ * @param {object} exifTags - EXIF tags from parser
+ * @returns {object|null} WhatsApp detection info
+ */
+const detectWhatsApp = (filePath, exifTags) => {
+  const filename = path.basename(filePath)
+  const result = {
+    isWhatsApp: false,
+    confidence: 'none',
+    indicators: []
+  }
+  
+  // Check filename patterns
+  // WhatsApp images: IMG-YYYYMMDD-WAxxxx.jpg or WhatsApp Image YYYY-MM-DD at HH.MM.SS.jpeg
+  if (/IMG-\d{8}-WA\d+/i.test(filename)) {
+    result.isWhatsApp = true
+    result.indicators.push('שם קובץ בפורמט WhatsApp (IMG-DATE-WA)')
+    result.confidence = 'high'
+  } else if (/WhatsApp\s*(Image|Video)/i.test(filename)) {
+    result.isWhatsApp = true
+    result.indicators.push('שם קובץ מכיל "WhatsApp"')
+    result.confidence = 'high'
+  }
+  
+  // Check EXIF software tag
+  if (exifTags?.Software && /whatsapp/i.test(exifTags.Software)) {
+    result.isWhatsApp = true
+    result.indicators.push('תוכנה: WhatsApp')
+    result.confidence = 'high'
+  }
+  
+  // Check if EXIF is mostly stripped (WhatsApp strips most EXIF)
+  // If we have a filename pattern but no GPS/camera data, likely WhatsApp
+  if (result.isWhatsApp && !exifTags?.GPSLatitude && !exifTags?.Make) {
+    result.indicators.push('EXIF מופשט (טיפוסי ל-WhatsApp)')
+  }
+  
+  // Check for typical WhatsApp dimensions (compressed)
+  // WhatsApp often compresses to max 1600px on longest side
+  
+  return result.isWhatsApp ? result : null
+}
+
+/**
+ * Convert GPS coordinates to decimal degrees
+ * @param {number} coord - GPS coordinate from EXIF
+ * @param {string} ref - N/S or E/W reference
+ * @returns {number} Decimal degrees
+ */
+const gpsToDecimal = (coord, ref) => {
+  if (coord == null) return null
+  let decimal = coord
+  if (ref === 'S' || ref === 'W') {
+    decimal = -decimal
+  }
+  return decimal
+}
+
+/**
+ * Convert exposure program code to Hebrew description
+ */
+const exposureProgramToHebrew = (code) => {
+  const programs = {
+    0: 'לא מוגדר',
+    1: 'ידני',
+    2: 'תוכנית רגילה',
+    3: 'עדיפות צמצם',
+    4: 'עדיפות מהירות',
+    5: 'יצירתי (עומק שדה)',
+    6: 'פעולה (מהירות גבוהה)',
+    7: 'פורטרט',
+    8: 'נוף'
+  }
+  return programs[code] || `קוד ${code}`
+}
+
+/**
+ * Convert metering mode code to Hebrew description
+ */
+const meteringModeToHebrew = (code) => {
+  const modes = {
+    0: 'לא ידוע',
+    1: 'ממוצע',
+    2: 'ממוצע משוקלל למרכז',
+    3: 'נקודתי',
+    4: 'רב-נקודתי',
+    5: 'דפוס (מטריקס)',
+    6: 'חלקי',
+    255: 'אחר'
+  }
+  return modes[code] || `קוד ${code}`
+}
+
+/**
+ * Convert flash code to Hebrew description
+ */
+const flashToHebrew = (code) => {
+  if (code == null) return null
+  const fired = code & 1
+  const returnMode = (code >> 1) & 3
+  const mode = (code >> 3) & 3
+  const redEye = (code >> 6) & 1
+  
+  let desc = fired ? 'הבזק הופעל' : 'הבזק לא הופעל'
+  if (mode === 1) desc += ', הבזק כפוי'
+  else if (mode === 2) desc += ', הבזק מבוטל'
+  else if (mode === 3) desc += ', הבזק אוטומטי'
+  if (redEye) desc += ', הפחתת עיניים אדומות'
+  
+  return desc
+}
+
+/**
+ * Convert white balance code to Hebrew
+ */
+const whiteBalanceToHebrew = (code) => {
+  const modes = {
+    0: 'אוטומטי',
+    1: 'ידני'
+  }
+  return modes[code] || `קוד ${code}`
+}
+
+/**
+ * Convert scene capture type to Hebrew
+ */
+const sceneCaptureTypeToHebrew = (code) => {
+  const types = {
+    0: 'רגיל',
+    1: 'נוף',
+    2: 'פורטרט',
+    3: 'לילה'
+  }
+  return types[code] || `קוד ${code}`
+}
+
+/**
+ * Convert light source to Hebrew
+ */
+const lightSourceToHebrew = (code) => {
+  const sources = {
+    0: 'לא ידוע',
+    1: 'אור יום',
+    2: 'פלורסנט',
+    3: 'טונגסטן (נורה רגילה)',
+    4: 'הבזק',
+    9: 'מזג אוויר נאה',
+    10: 'מעונן',
+    11: 'צל',
+    12: 'פלורסנט אור יום',
+    13: 'פלורסנט לבן יום',
+    14: 'פלורסנט לבן קר',
+    15: 'פלורסנט לבן',
+    17: 'אור רגיל A',
+    18: 'אור רגיל B',
+    19: 'אור רגיל C',
+    20: 'D55',
+    21: 'D65',
+    22: 'D75',
+    23: 'D50',
+    24: 'טונגסטן סטודיו ISO',
+    255: 'מקור אור אחר'
+  }
+  return sources[code] || `קוד ${code}`
+}
+
+/**
+ * Convert orientation code to Hebrew
+ */
+const orientationToHebrew = (code) => {
+  const orientations = {
+    1: 'רגיל (0°)',
+    2: 'היפוך אופקי',
+    3: 'סיבוב 180°',
+    4: 'היפוך אנכי',
+    5: 'סיבוב 90° + היפוך אופקי',
+    6: 'סיבוב 90° ימינה',
+    7: 'סיבוב 90° + היפוך אנכי',
+    8: 'סיבוב 90° שמאלה'
+  }
+  return orientations[code] || `קוד ${code}`
+}
+
+/**
+ * Convert color space code to name
+ */
+const colorSpaceToName = (code) => {
+  const spaces = {
+    1: 'sRGB',
+    2: 'Adobe RGB',
+    65535: 'Uncalibrated'
+  }
+  return spaces[code] || `קוד ${code}`
+}
+
+/**
+ * Format exposure time as fraction
+ */
+const formatExposureTime = (seconds) => {
+  if (seconds == null) return null
+  if (seconds >= 1) return `${seconds}s`
+  const fraction = Math.round(1 / seconds)
+  return `1/${fraction}s`
+}
+
+/**
+ * Format aperture value
+ */
+const formatAperture = (fNumber) => {
+  if (fNumber == null) return null
+  return `f/${fNumber}`
+}
+
+/**
+ * Format focal length
+ */
+const formatFocalLength = (mm) => {
+  if (mm == null) return null
+  return `${mm}mm`
+}
+
+/**
+ * Get detailed file metadata including size, dimensions, EXIF - ALL possible data
+ * @param {string} filePath 
+ * @returns {object} File metadata
+ */
+const getFileMetadata = async (filePath) => {
+  const metadata = {
+    fileSize: null,
+    width: null,
+    height: null,
+    extension: path.extname(filePath).toLowerCase(),
+    fileType: isImage(filePath) ? 'image' : isVideo(filePath) ? 'video' : 'unknown',
+    exif: null,
+    camera: null,
+    lens: null,
+    settings: null,
+    image: null,
+    dates: null,
+    gps: null,
+    author: null,
+    software: null,
+    whatsapp: null,
+    source: null,
+    raw: null // All raw EXIF tags for debugging/completeness
+  }
+  
+  try {
+    // Get file size and filesystem dates
+    const stat = await fs.stat(filePath)
+    metadata.fileSize = stat.size
+    metadata.fileCreated = stat.birthtime?.toISOString() || null
+    metadata.fileModified = stat.mtime?.toISOString() || null
+    metadata.fileAccessed = stat.atime?.toISOString() || null
+    
+    // Get image dimensions and EXIF data
+    if (isImage(filePath)) {
+      try {
+        // Get dimensions and format info using sharp
+        const sharpMeta = await sharp(filePath).metadata()
+        metadata.width = sharpMeta.width
+        metadata.height = sharpMeta.height
+        metadata.image = {
+          width: sharpMeta.width,
+          height: sharpMeta.height,
+          megapixels: sharpMeta.width && sharpMeta.height 
+            ? ((sharpMeta.width * sharpMeta.height) / 1000000).toFixed(1) + ' MP'
+            : null,
+          aspectRatio: sharpMeta.width && sharpMeta.height
+            ? (sharpMeta.width / sharpMeta.height).toFixed(2)
+            : null,
+          format: sharpMeta.format || null,
+          space: sharpMeta.space || null, // color space from sharp
+          channels: sharpMeta.channels || null,
+          depth: sharpMeta.depth || null, // bit depth
+          density: sharpMeta.density || null, // DPI
+          hasAlpha: sharpMeta.hasAlpha || false,
+          hasProfile: sharpMeta.hasProfile || false,
+          isProgressive: sharpMeta.isProgressive || false
+        }
+        
+        // Try to get EXIF data
+        try {
+          const buf = await fs.readFile(filePath)
+          const parser = exif.create(buf)
+          const result = parser.parse()
+          const tags = result.tags || {}
+          
+          // Store ALL raw tags for completeness
+          metadata.raw = { ...tags }
+          
+          // ========== CAMERA INFO ==========
+          metadata.camera = {
+            make: tags.Make || null,
+            model: tags.Model || null,
+            serialNumber: tags.BodySerialNumber || tags.SerialNumber || null,
+            ownerName: tags.CameraOwnerName || tags.OwnerName || null,
+            firmware: tags.Firmware || null
+          }
+          
+          // ========== LENS INFO ==========
+          metadata.lens = {
+            make: tags.LensMake || null,
+            model: tags.LensModel || tags.Lens || null,
+            serialNumber: tags.LensSerialNumber || null,
+            focalLengthMin: tags.LensInfo?.[0] || null,
+            focalLengthMax: tags.LensInfo?.[1] || null,
+            apertureMin: tags.LensInfo?.[2] || null,
+            apertureMax: tags.LensInfo?.[3] || null
+          }
+          
+          // ========== CAMERA SETTINGS ==========
+          metadata.settings = {
+            // Exposure
+            exposureTime: tags.ExposureTime || null,
+            exposureTimeFormatted: formatExposureTime(tags.ExposureTime),
+            aperture: tags.FNumber || null,
+            apertureFormatted: formatAperture(tags.FNumber),
+            iso: tags.ISO || tags.ISOSpeedRatings || null,
+            exposureProgram: tags.ExposureProgram || null,
+            exposureProgramDesc: exposureProgramToHebrew(tags.ExposureProgram),
+            exposureMode: tags.ExposureMode || null, // 0=auto, 1=manual, 2=bracket
+            exposureCompensation: tags.ExposureCompensation || tags.ExposureBiasValue || null,
+            
+            // Focus & Zoom
+            focalLength: tags.FocalLength || null,
+            focalLengthFormatted: formatFocalLength(tags.FocalLength),
+            focalLength35mm: tags.FocalLengthIn35mmFormat || null,
+            subjectDistance: tags.SubjectDistance || null,
+            subjectDistanceRange: tags.SubjectDistanceRange || null, // 0=unknown, 1=macro, 2=close, 3=distant
+            digitalZoomRatio: tags.DigitalZoomRatio || null,
+            
+            // Metering & Flash
+            meteringMode: tags.MeteringMode || null,
+            meteringModeDesc: meteringModeToHebrew(tags.MeteringMode),
+            flash: tags.Flash || null,
+            flashDesc: flashToHebrew(tags.Flash),
+            flashEnergy: tags.FlashEnergy || null,
+            
+            // White Balance & Light
+            whiteBalance: tags.WhiteBalance || null,
+            whiteBalanceDesc: whiteBalanceToHebrew(tags.WhiteBalance),
+            lightSource: tags.LightSource || null,
+            lightSourceDesc: lightSourceToHebrew(tags.LightSource),
+            
+            // Scene
+            sceneCaptureType: tags.SceneCaptureType || null,
+            sceneCaptureTypeDesc: sceneCaptureTypeToHebrew(tags.SceneCaptureType),
+            sceneType: tags.SceneType || null, // 1=directly photographed
+            
+            // Image adjustments
+            contrast: tags.Contrast || null, // 0=normal, 1=soft, 2=hard
+            saturation: tags.Saturation || null, // 0=normal, 1=low, 2=high
+            sharpness: tags.Sharpness || null, // 0=normal, 1=soft, 2=hard
+            brightness: tags.BrightnessValue || null,
+            gainControl: tags.GainControl || null, // 0=none, 1=low up, 2=high up, 3=low down, 4=high down
+            
+            // Other
+            sensingMethod: tags.SensingMethod || null, // 2=one-chip color area
+            fileSource: tags.FileSource || null, // 3=digital camera
+            customRendered: tags.CustomRendered || null // 0=normal, 1=custom
+          }
+          
+          // ========== IMAGE INFO ==========
+          metadata.image = {
+            ...metadata.image,
+            orientation: tags.Orientation || null,
+            orientationDesc: orientationToHebrew(tags.Orientation),
+            colorSpace: tags.ColorSpace || null,
+            colorSpaceName: colorSpaceToName(tags.ColorSpace),
+            
+            // Resolution
+            xResolution: tags.XResolution || null,
+            yResolution: tags.YResolution || null,
+            resolutionUnit: tags.ResolutionUnit || null, // 2=inches, 3=cm
+            
+            // Compression
+            compression: tags.Compression || null,
+            compressedBitsPerPixel: tags.CompressedBitsPerPixel || null,
+            
+            // Technical
+            bitsPerSample: tags.BitsPerSample || null,
+            samplesPerPixel: tags.SamplesPerPixel || null,
+            photometricInterpretation: tags.PhotometricInterpretation || null,
+            yCbCrPositioning: tags.YCbCrPositioning || null,
+            
+            // Versions
+            exifVersion: tags.ExifVersion || null,
+            flashpixVersion: tags.FlashpixVersion || null,
+            
+            // Unique ID
+            imageUniqueId: tags.ImageUniqueID || null
+          }
+          
+          // ========== DATES ==========
+          metadata.dates = {
+            taken: tags.DateTimeOriginal 
+              ? new Date(tags.DateTimeOriginal * 1000).toISOString() 
+              : null,
+            digitized: tags.CreateDate || tags.DateTimeDigitized
+              ? new Date((tags.CreateDate || tags.DateTimeDigitized) * 1000).toISOString()
+              : null,
+            modified: tags.ModifyDate || tags.DateTime
+              ? new Date((tags.ModifyDate || tags.DateTime) * 1000).toISOString()
+              : null,
+            // Sub-second precision
+            subSecTimeOriginal: tags.SubSecTimeOriginal || null,
+            subSecTimeDigitized: tags.SubSecTimeDigitized || null,
+            // Timezone offset
+            offsetTime: tags.OffsetTime || null,
+            offsetTimeOriginal: tags.OffsetTimeOriginal || null,
+            offsetTimeDigitized: tags.OffsetTimeDigitized || null
+          }
+          
+          // ========== GPS DATA ==========
+          if (tags.GPSLatitude != null && tags.GPSLongitude != null) {
+            const lat = gpsToDecimal(tags.GPSLatitude, tags.GPSLatitudeRef)
+            const lng = gpsToDecimal(tags.GPSLongitude, tags.GPSLongitudeRef)
+            
+            if (lat != null && lng != null) {
+              metadata.gps = {
+                latitude: lat,
+                longitude: lng,
+                latitudeRef: tags.GPSLatitudeRef || null, // N or S
+                longitudeRef: tags.GPSLongitudeRef || null, // E or W
+                altitude: tags.GPSAltitude || null,
+                altitudeRef: tags.GPSAltitudeRef || null, // 0=above sea level, 1=below
+                
+                // Direction
+                imgDirection: tags.GPSImgDirection || null,
+                imgDirectionRef: tags.GPSImgDirectionRef || null, // T=true north, M=magnetic
+                destBearing: tags.GPSDestBearing || null,
+                destBearingRef: tags.GPSDestBearingRef || null,
+                
+                // Speed (if moving while taking photo)
+                speed: tags.GPSSpeed || null,
+                speedRef: tags.GPSSpeedRef || null, // K=km/h, M=mph, N=knots
+                
+                // Date/Time
+                timestamp: tags.GPSTimeStamp || null,
+                datestamp: tags.GPSDateStamp || null,
+                
+                // Accuracy
+                dop: tags.GPSDOP || null, // Dilution of Precision
+                measureMode: tags.GPSMeasureMode || null, // 2=2D, 3=3D
+                
+                // Processing
+                processingMethod: tags.GPSProcessingMethod || null,
+                areaInformation: tags.GPSAreaInformation || null,
+                satellites: tags.GPSSatellites || null,
+                status: tags.GPSStatus || null, // A=active, V=void
+                mapDatum: tags.GPSMapDatum || null,
+                
+                // Links
+                mapsUrl: `https://www.google.com/maps?q=${lat},${lng}`,
+                wazeUrl: `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`,
+                osmUrl: `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}&zoom=15`,
+                
+                // Formatted
+                formatted: `${Math.abs(lat).toFixed(6)}°${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lng).toFixed(6)}°${lng >= 0 ? 'E' : 'W'}`
+              }
+            }
+          }
+          
+          // ========== AUTHOR & COPYRIGHT ==========
+          metadata.author = {
+            artist: tags.Artist || null,
+            copyright: tags.Copyright || null,
+            ownerName: tags.CameraOwnerName || tags.OwnerName || null,
+            imageDescription: tags.ImageDescription || null,
+            userComment: tags.UserComment || null,
+            documentName: tags.DocumentName || null,
+            rating: tags.Rating || null, // 0-5 star rating
+            ratingPercent: tags.RatingPercent || null
+          }
+          
+          // ========== SOFTWARE ==========
+          metadata.software = {
+            software: tags.Software || null,
+            processingSoftware: tags.ProcessingSoftware || null,
+            hostComputer: tags.HostComputer || null
+          }
+          
+          // ========== BACKWARD COMPATIBLE EXIF ==========
+          metadata.exif = {
+            make: tags.Make || null,
+            model: tags.Model || null,
+            dateTaken: metadata.dates?.taken,
+            dateDigitized: metadata.dates?.digitized,
+            orientation: tags.Orientation || null,
+            focalLength: tags.FocalLength || null,
+            focalLength35mm: tags.FocalLengthIn35mmFormat || null,
+            iso: tags.ISO || tags.ISOSpeedRatings || null,
+            aperture: tags.FNumber || null,
+            exposureTime: tags.ExposureTime || null,
+            exposureProgram: tags.ExposureProgram || null,
+            exposureCompensation: tags.ExposureCompensation || null,
+            meteringMode: tags.MeteringMode || null,
+            flash: tags.Flash || null,
+            whiteBalance: tags.WhiteBalance || null,
+            colorSpace: tags.ColorSpace || null,
+            software: tags.Software || null,
+            artist: tags.Artist || null,
+            copyright: tags.Copyright || null,
+            imageDescription: tags.ImageDescription || null,
+            userComment: tags.UserComment || null
+          }
+          
+          // ========== WHATSAPP DETECTION ==========
+          metadata.whatsapp = detectWhatsApp(filePath, tags)
+          
+          // ========== SOURCE DETECTION ==========
+          const filename = path.basename(filePath).toLowerCase()
+          const fullPath = filePath.toLowerCase()
+          
+          // Detect source based on various indicators
+          if (/telegram/i.test(filename) || /telegram/i.test(tags.Software || '')) {
+            metadata.source = { type: 'telegram', confidence: 'high', indicator: 'filename/software' }
+          } else if (/screenshot/i.test(filename) || /screen\s*shot/i.test(filename)) {
+            metadata.source = { type: 'screenshot', confidence: 'high', indicator: 'filename' }
+          } else if (/snapseed/i.test(tags.Software || '')) {
+            metadata.source = { type: 'snapseed', confidence: 'high', indicator: 'software' }
+          } else if (/lightroom/i.test(tags.Software || '')) {
+            metadata.source = { type: 'lightroom', confidence: 'high', indicator: 'software' }
+          } else if (/photoshop/i.test(tags.Software || '')) {
+            metadata.source = { type: 'photoshop', confidence: 'high', indicator: 'software' }
+          } else if (/instagram/i.test(filename) || /instagram/i.test(tags.Software || '')) {
+            metadata.source = { type: 'instagram', confidence: 'high', indicator: 'filename/software' }
+          } else if (/facebook/i.test(filename) || /fb_img/i.test(filename)) {
+            metadata.source = { type: 'facebook', confidence: 'high', indicator: 'filename' }
+          } else if (/messenger/i.test(filename)) {
+            metadata.source = { type: 'messenger', confidence: 'high', indicator: 'filename' }
+          } else if (/dcim/i.test(fullPath)) {
+            metadata.source = { type: 'camera', confidence: 'medium', indicator: 'path contains DCIM' }
+          } else if (metadata.whatsapp?.isWhatsApp) {
+            metadata.source = { type: 'whatsapp', confidence: metadata.whatsapp.confidence, indicator: metadata.whatsapp.indicators.join(', ') }
+          } else if (tags.Make && tags.Model) {
+            metadata.source = { type: 'camera', confidence: 'medium', indicator: 'has camera EXIF' }
+          }
+          
+        } catch (exifErr) {
+          // EXIF parsing failed, continue without it
+          logger.log('[faceService] EXIF parsing failed for', filePath, exifErr.message)
+        }
+      } catch (sharpErr) {
+        logger.log('[faceService] Sharp metadata failed for', filePath, sharpErr.message)
+      }
+    } else if (isVideo(filePath)) {
+      // For videos, we could use ffprobe to get dimensions, but keeping it simple for now
+      // Could add video metadata extraction later
+      metadata.source = { type: 'video', confidence: 'high', indicator: 'file extension' }
+    }
+  } catch (err) {
+    logger.error('[faceService] getFileMetadata failed:', err.message)
+  }
+  
+  return metadata
+}
 
 // ============= Cache Functions =============
 
@@ -621,19 +1183,49 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
   const scanPromises = toScan.map(file => 
     limiter(async () => {
       const filename = path.basename(file)
+      const fileStartTime = Date.now()
       
       // Track start of processing
-      activeFiles.set(filename, { startTime: Date.now(), path: file })
+      activeFiles.set(filename, { startTime: fileStartTime, path: file })
       sendProgressUpdate()
       
       const faces = await detectFacesInFile(file)
       
       const normalizedPath = file.replace(/\\/g, '/')
       const mtime = await getFileMtime(file)
+      const processingTime = Date.now() - fileStartTime
+      
+      // Get additional file metadata
+      const fileMeta = await getFileMetadata(file)
       
       // Store in cache (convert Float32Array to regular array for JSON)
       newCacheFiles[normalizedPath] = {
         mtime,
+        scannedAt: new Date().toISOString(),
+        processingTime, // Duration in ms
+        facesCount: faces.length,
+        // File metadata
+        fileSize: fileMeta.fileSize,
+        fileCreated: fileMeta.fileCreated,
+        fileModified: fileMeta.fileModified,
+        fileAccessed: fileMeta.fileAccessed,
+        width: fileMeta.width,
+        height: fileMeta.height,
+        extension: fileMeta.extension,
+        fileType: fileMeta.fileType,
+        // Detailed metadata
+        camera: fileMeta.camera,
+        lens: fileMeta.lens,
+        settings: fileMeta.settings,
+        image: fileMeta.image,
+        dates: fileMeta.dates,
+        gps: fileMeta.gps,
+        author: fileMeta.author,
+        software: fileMeta.software,
+        whatsapp: fileMeta.whatsapp,
+        source: fileMeta.source,
+        // Backward compatible
+        exif: fileMeta.exif,
         faces: faces.slice(0, MAX_SAMPLES).map(f => ({
           descriptor: Array.from(f.descriptor),
           box: f.box ? {
@@ -730,5 +1322,152 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
   return result
 }
 
-export { scanFaces }
+/**
+ * Get scan history from cache file
+ * @param {string} sourcePath - Root directory that was scanned
+ * @returns {object} Scan history data with files info
+ */
+const getScanHistory = async (sourcePath) => {
+  const root = cleanPath(sourcePath)
+  if (!root) throw new Error('sourcePath is required')
+  if (!fssync.existsSync(root)) {
+    const err = new Error(`Source path not found: ${root}`)
+    err.code = 'ENOENT'
+    throw err
+  }
+  
+  const cache = await loadFaceCache(root)
+  if (!cache) {
+    return { files: [], lastScan: null, totalFiles: 0 }
+  }
+  
+  // Convert cache files to array with more details
+  const files = Object.entries(cache.files || {}).map(([filePath, data]) => ({
+    path: filePath,
+    filename: path.basename(filePath),
+    mtime: data.mtime,
+    scannedAt: data.scannedAt || null,
+    processingTime: data.processingTime || null,
+    facesCount: data.facesCount ?? data.faces?.length ?? 0,
+    // File metadata
+    fileSize: data.fileSize || null,
+    fileCreated: data.fileCreated || null,
+    fileModified: data.fileModified || null,
+    fileAccessed: data.fileAccessed || null,
+    width: data.width || null,
+    height: data.height || null,
+    extension: data.extension || path.extname(filePath).toLowerCase(),
+    fileType: data.fileType || 'unknown',
+    // Detailed metadata (ALL fields)
+    camera: data.camera || null,
+    lens: data.lens || null,
+    settings: data.settings || null,
+    image: data.image || null,
+    dates: data.dates || null,
+    gps: data.gps || null,
+    author: data.author || null,
+    software: data.software || null,
+    whatsapp: data.whatsapp || null,
+    source: data.source || null,
+    // Backward compatible
+    exif: data.exif || null,
+    thumbnail: data.faces?.[0]?.thumbnail || filePath,
+    faceThumb: data.faces?.[0]?.faceThumb || null
+  }))
+  
+  // Sort by scannedAt (newest first)
+  files.sort((a, b) => {
+    if (!a.scannedAt && !b.scannedAt) return 0
+    if (!a.scannedAt) return 1
+    if (!b.scannedAt) return -1
+    return new Date(b.scannedAt) - new Date(a.scannedAt)
+  })
+  
+  // Calculate additional stats
+  const totalSize = files.reduce((sum, f) => sum + (f.fileSize || 0), 0)
+  const imagesCount = files.filter(f => f.fileType === 'image').length
+  const videosCount = files.filter(f => f.fileType === 'video').length
+  const filesWithExif = files.filter(f => f.dates?.taken || f.exif?.dateTaken).length
+  const filesWithGps = files.filter(f => f.gps?.latitude).length
+  const filesFromWhatsApp = files.filter(f => f.whatsapp?.isWhatsApp).length
+  const filesFromTelegram = files.filter(f => f.source?.type === 'telegram').length
+  const filesFromInstagram = files.filter(f => f.source?.type === 'instagram').length
+  const filesFromFacebook = files.filter(f => f.source?.type === 'facebook').length
+  const screenshots = files.filter(f => f.source?.type === 'screenshot').length
+  const editedFiles = files.filter(f => 
+    f.source?.type === 'photoshop' || 
+    f.source?.type === 'lightroom' || 
+    f.source?.type === 'snapseed'
+  ).length
+  
+  // Camera stats
+  const cameras = [...new Set(files.filter(f => f.camera?.model || f.exif?.model).map(f => f.camera?.model || f.exif?.model))]
+  const lenses = [...new Set(files.filter(f => f.lens?.model).map(f => f.lens.model))]
+  const softwareUsed = [...new Set(files.filter(f => f.software?.software || f.exif?.software).map(f => f.software?.software || f.exif?.software))]
+  
+  // Artists/Authors
+  const artists = [...new Set(files.filter(f => f.author?.artist || f.exif?.artist).map(f => f.author?.artist || f.exif?.artist))]
+  
+  // Extensions breakdown
+  const extensionCounts = {}
+  files.forEach(f => {
+    const ext = f.extension || 'unknown'
+    extensionCounts[ext] = (extensionCounts[ext] || 0) + 1
+  })
+  
+  // Resolution stats
+  const resolutions = files
+    .filter(f => f.width && f.height)
+    .map(f => `${f.width}x${f.height}`)
+  const uniqueResolutions = [...new Set(resolutions)]
+  
+  // ISO stats
+  const isoValues = files
+    .filter(f => f.settings?.iso || f.exif?.iso)
+    .map(f => f.settings?.iso || f.exif?.iso)
+  const avgIso = isoValues.length ? Math.round(isoValues.reduce((a, b) => a + b, 0) / isoValues.length) : null
+  
+  return {
+    files,
+    lastScan: cache.lastScan,
+    totalFiles: files.length,
+    stats: {
+      // Processing stats
+      totalProcessingTime: files.reduce((sum, f) => sum + (f.processingTime || 0), 0),
+      avgProcessingTime: files.length ? Math.round(files.reduce((sum, f) => sum + (f.processingTime || 0), 0) / files.length) : 0,
+      
+      // Face stats
+      totalFaces: files.reduce((sum, f) => sum + (f.facesCount || 0), 0),
+      filesWithFaces: files.filter(f => f.facesCount > 0).length,
+      
+      // File stats
+      totalSize,
+      imagesCount,
+      videosCount,
+      filesWithExif,
+      
+      // Equipment
+      cameras,
+      lenses,
+      softwareUsed,
+      artists,
+      
+      // Location & source stats
+      filesWithGps,
+      filesFromWhatsApp,
+      filesFromTelegram,
+      filesFromInstagram,
+      filesFromFacebook,
+      screenshots,
+      editedFiles,
+      
+      // Technical stats
+      extensionCounts,
+      uniqueResolutions: uniqueResolutions.slice(0, 20), // Limit to 20 most common
+      avgIso
+    }
+  }
+}
+
+export { scanFaces, getScanHistory }
 

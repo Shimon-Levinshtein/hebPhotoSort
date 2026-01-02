@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-do
 import SortPage from './pages/SortPage'
 import DuplicatesPage from './pages/DuplicatesPage'
 import FaceSearchPage from './pages/FaceSearchPage'
+import ScanHistoryPage from './pages/ScanHistoryPage'
 import ToastContainer from '@/components/ToastContainer'
 import './index.css'
 
@@ -29,6 +30,7 @@ const App = () => (
             {navItem('/sort', 'מיון תמונות')}
             {navItem('/duplicates', 'בדיקת כפילויות')}
             {navItem('/faces', 'חיפוש לפי פנים')}
+            {navItem('/scan-history', 'היסטוריית סריקה')}
           </div>
         </aside>
 
@@ -38,6 +40,7 @@ const App = () => (
             <Route path="/sort" element={<SortPage />} />
             <Route path="/duplicates" element={<DuplicatesPage />} />
             <Route path="/faces" element={<FaceSearchPage />} />
+            <Route path="/scan-history" element={<ScanHistoryPage />} />
             <Route path="*" element={<Navigate to="/sort" replace />} />
           </Routes>
         </section>
