@@ -621,15 +621,30 @@ const loadFaceCache = async (rootPath) => {
 const saveFaceCache = async (rootPath, cacheData) => {
   const cachePath = path.join(rootPath, CACHE_FILENAME)
   try {
+    // Ensure directory exists
+    await fs.mkdir(rootPath, { recursive: true })
+    
     const data = {
       version: CACHE_VERSION,
       lastScan: new Date().toISOString(),
       files: cacheData.files || {}
     }
-    await fs.writeFile(cachePath, JSON.stringify(data, null, 2), 'utf-8')
-    logger.log(`[faceService] Cache saved with ${Object.keys(data.files).length} files`)
+    
+    const jsonContent = JSON.stringify(data, null, 2)
+    await fs.writeFile(cachePath, jsonContent, 'utf-8')
+    
+    // Verify file was written
+    const stats = await fs.stat(cachePath)
+    logger.log(`[faceService] Cache saved to ${cachePath} with ${Object.keys(data.files).length} files (${stats.size} bytes)`)
   } catch (err) {
-    logger.error('[faceService] Failed to save cache:', err.message)
+    logger.error('[faceService] Failed to save cache:', {
+      path: cachePath,
+      error: err.message,
+      code: err.code,
+      stack: err.stack
+    })
+    // Re-throw to ensure caller knows about the failure
+    throw err
   }
 }
 
@@ -1145,10 +1160,6 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
     })
   }
 
-  // Track when to save cache (save every N files for efficiency)
-  const CACHE_SAVE_INTERVAL = 5
-  let lastCacheSave = 0
-  
   // Track currently processing files with their start times
   const activeFiles = new Map() // filename -> { startTime, path }
   
@@ -1246,11 +1257,13 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
       activeFiles.delete(filename)
       processed += 1
       
-      // Save cache periodically (every CACHE_SAVE_INTERVAL files) for resume capability
-      if (processed - lastCacheSave >= CACHE_SAVE_INTERVAL) {
+      // Save cache after every file for immediate persistence
+      try {
         await saveFaceCache(root, { files: newCacheFiles })
-        lastCacheSave = processed
         logger.log(`[faceService] Cache saved at ${processed}/${totalToScan} files`)
+      } catch (err) {
+        logger.error(`[faceService] Failed to save cache at ${processed}/${totalToScan}:`, err.message)
+        // Continue processing even if save fails
       }
       
       // Report progress
@@ -1266,7 +1279,13 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
   // If cancelled, save cache and return partial results
   if (isCancelled()) {
     logger.log('[faceService] Scan was cancelled, saving cache for resume...')
-    await saveFaceCache(root, { files: newCacheFiles })
+    try {
+      await saveFaceCache(root, { files: newCacheFiles })
+      logger.log(`[faceService] Cache saved after cancellation`)
+    } catch (err) {
+      logger.error('[faceService] Failed to save cache after cancellation:', err.message)
+      // Continue anyway to return partial results
+    }
     
     const partialFaces = clustersToFaces(clusters)
     return {
@@ -1282,9 +1301,15 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
     }
   }
 
-  // Final cache save
+  // Final cache save - ensure it always happens
   if (onProgress) onProgress({ phase: 'cache-save', message: 'שומר מטמון...' })
-  await saveFaceCache(root, { files: newCacheFiles })
+  try {
+    await saveFaceCache(root, { files: newCacheFiles })
+    logger.log(`[faceService] Final cache save completed successfully`)
+  } catch (err) {
+    logger.error('[faceService] Final cache save failed, but continuing:', err.message)
+    // Don't throw - we still want to return results even if cache save fails
+  }
 
   // Report: processing results
   if (onProgress) onProgress({ phase: 'process', message: 'מעבד תוצאות...' })
