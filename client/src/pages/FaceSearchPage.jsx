@@ -185,7 +185,7 @@ const FaceSearchPage = () => {
         resolve()
       }
     })
-  }, [sourcePath, setSourcePath, addToast, faces.length])
+  }, [sourcePath, setSourcePath, addToast, faces.length, concurrency])
 
   const handlePickSource = async () => {
     // העדפה: דיאלוג של Electron אם זמין

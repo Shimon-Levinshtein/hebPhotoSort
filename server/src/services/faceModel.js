@@ -6,6 +6,7 @@ import fs from 'node:fs/promises'
 import fssync from 'node:fs'
 import { createRequire } from 'node:module'
 import { Image as NativeImage, ImageData, loadImage as nativeLoadImage, createCanvas } from '@napi-rs/canvas'
+import logger from '../utils/logger.js'
 
 // face-api expects Canvas to be a class that can be instantiated with new Canvas(w, h)
 // We need to create a proper class that wraps createCanvas
@@ -14,7 +15,7 @@ const Canvas = class Canvas {
     const w = typeof width === 'number' && width > 0 ? Math.floor(width) : 300
     const h = typeof height === 'number' && height > 0 ? Math.floor(height) : 150
     if (width !== w || height !== h) {
-      console.log('[faceModel] Canvas constructor fixed dimensions:', { width, height, fixed: { w, h } })
+      logger.log('[faceModel] Canvas constructor fixed dimensions:', { width, height, fixed: { w, h } })
     }
     const canvas = createCanvas(w, h)
     // Copy all properties from the native canvas to this instance
@@ -43,7 +44,7 @@ const Image = NativeImage
 // Custom loadImage that ensures width/height are accessible
 const loadImage = async (input) => {
   const img = await nativeLoadImage(input)
-  console.log('[faceModel] loadImage result:', { 
+  logger.log('[faceModel] loadImage result:', { 
     width: img.width, 
     height: img.height,
     naturalWidth: img.naturalWidth,
@@ -62,7 +63,7 @@ const imageToCanvas = (img) => {
     throw new Error(`Cannot get image dimensions: width=${width}, height=${height}`)
   }
   
-  console.log('[faceModel] imageToCanvas creating canvas:', { width, height })
+  logger.log('[faceModel] imageToCanvas creating canvas:', { width, height })
   const canvas = createCanvas(width, height)
   const ctx = canvas.getContext('2d')
   ctx.drawImage(img, 0, 0, width, height)
@@ -80,7 +81,7 @@ const canvasToTensor = (canvas) => {
   const ctx = canvas.getContext('2d')
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
   
-  console.log('[faceModel] canvasToTensor:', { 
+  logger.log('[faceModel] canvasToTensor:', { 
     width: canvas.width, 
     height: canvas.height,
     dataLength: imageData.data.length 
@@ -151,7 +152,7 @@ const ensureModels = async (dir = MODEL_DIR) => {
     try {
       await downloadIfMissing(dir, file)
     } catch (err) {
-      console.error('[faceModel] failed to download model file', { file, error: err?.message })
+      logger.error('[faceModel] failed to download model file', { file, error: err?.message })
       // אם הורדה נכשלה, השאר את השגיאה כדי שהקריאה תדע לעדכן את המשתמש
       throw err
     }
@@ -161,17 +162,17 @@ const ensureModels = async (dir = MODEL_DIR) => {
 
 const initFaceApi = async () => {
   if (initialized) {
-    console.log('[faceModel] Already initialized, returning cached instance')
+    logger.log('[faceModel] Already initialized, returning cached instance')
     return { modelPath: MODEL_DIR, faceapi: faceapiInstance }
   }
 
-  console.log('[faceModel] Loading face-api...')
+  logger.log('[faceModel] Loading face-api...')
   const faceapi = await loadFaceApi()
-  console.log('[faceModel] face-api loaded, patching environment...')
+  logger.log('[faceModel] face-api loaded, patching environment...')
   
-  console.log('[faceModel] Canvas:', typeof Canvas, Canvas?.name)
-  console.log('[faceModel] Image:', typeof Image, Image?.name)
-  console.log('[faceModel] ImageData:', typeof ImageData, ImageData?.name)
+  logger.log('[faceModel] Canvas:', typeof Canvas, Canvas?.name)
+  logger.log('[faceModel] Image:', typeof Image, Image?.name)
+  logger.log('[faceModel] ImageData:', typeof ImageData, ImageData?.name)
   
   faceapi.env.monkeyPatch({
     Canvas,
@@ -182,22 +183,22 @@ const initFaceApi = async () => {
     TextDecoder: globalThis.TextDecoder,
   })
   
-  console.log('[faceModel] Environment patched, setting up TensorFlow backend...')
+  logger.log('[faceModel] Environment patched, setting up TensorFlow backend...')
   // Use face-api's bundled TensorFlow, just set the backend
   await faceapi.tf.setBackend('cpu')
   await faceapi.tf.ready()
-  console.log('[faceModel] TensorFlow backend ready')
+  logger.log('[faceModel] TensorFlow backend ready')
 
-  console.log('[faceModel] Downloading/loading models...')
+  logger.log('[faceModel] Downloading/loading models...')
   const modelPath = await ensureModels()
-  console.log('[faceModel] Models path:', modelPath)
+  logger.log('[faceModel] Models path:', modelPath)
   
   await Promise.all([
     faceapi.nets.ssdMobilenetv1.loadFromDisk(modelPath),
     faceapi.nets.faceLandmark68Net.loadFromDisk(modelPath),
     faceapi.nets.faceRecognitionNet.loadFromDisk(modelPath),
   ])
-  console.log('[faceModel] Models loaded successfully')
+  logger.log('[faceModel] Models loaded successfully')
 
   initialized = true
   return { modelPath, faceapi }

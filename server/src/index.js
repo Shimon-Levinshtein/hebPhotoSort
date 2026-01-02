@@ -1,6 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import router from './routes/index.js'
+import logger from './utils/logger.js'
 
 const app = express()
 const PORT = process.env.PORT || 4000
@@ -14,7 +15,7 @@ app.use((req, res, next) => {
   const { method, url, body } = req
   res.on('finish', () => {
     const ms = Date.now() - start
-    console.log(
+    logger.log(
       `[HTTP] ${method} ${url} -> ${res.statusCode} (${ms}ms) body=${JSON.stringify(body || {})}`,
     )
   })
@@ -25,7 +26,7 @@ app.use('/api', router)
 
 // Global error logger & handler
 app.use((err, req, res, _next) => {
-  console.error('[SERVER ERROR]', {
+  logger.error('[SERVER ERROR]', {
     method: req.method,
     url: req.originalUrl,
     message: err?.message,
@@ -38,15 +39,15 @@ app.use((err, req, res, _next) => {
 
 // Catch unhandled async errors
 process.on('unhandledRejection', (reason) => {
-  console.error('[UNHANDLED REJECTION]', reason)
+  logger.error('[UNHANDLED REJECTION]', reason)
 })
 
 process.on('uncaughtException', (err) => {
-  console.error('[UNCAUGHT EXCEPTION]', err)
+  logger.error('[UNCAUGHT EXCEPTION]', err)
 })
 
 app.listen(PORT, () => {
-  console.log(`HebPhotoSort API running on http://localhost:${PORT}`)
+  logger.log(`HebPhotoSort API running on http://localhost:${PORT}`)
 })
 
 

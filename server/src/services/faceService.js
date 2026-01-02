@@ -8,6 +8,7 @@ import sharp from 'sharp'
 import ffmpegPath from 'ffmpeg-static'
 import { cleanPath, isImage, isVideo, isMedia } from './fileService.js'
 import { initFaceApi, loadImage, imageToCanvas, canvasToTensor } from './faceModel.js'
+import logger from '../utils/logger.js'
 
 // Will be set after initFaceApi
 let faceapi = null
@@ -38,14 +39,14 @@ const loadFaceCache = async (rootPath) => {
     
     // Validate cache version
     if (cache.version !== CACHE_VERSION) {
-      console.log('[faceService] Cache version mismatch, will rescan all')
+      logger.log('[faceService] Cache version mismatch, will rescan all')
       return null
     }
     
-    console.log(`[faceService] Loaded cache with ${Object.keys(cache.files || {}).length} files`)
+    logger.log(`[faceService] Loaded cache with ${Object.keys(cache.files || {}).length} files`)
     return cache
   } catch (err) {
-    console.error('[faceService] Failed to load cache:', err.message)
+    logger.error('[faceService] Failed to load cache:', err.message)
     return null
   }
 }
@@ -64,9 +65,9 @@ const saveFaceCache = async (rootPath, cacheData) => {
       files: cacheData.files || {}
     }
     await fs.writeFile(cachePath, JSON.stringify(data, null, 2), 'utf-8')
-    console.log(`[faceService] Cache saved with ${Object.keys(data.files).length} files`)
+    logger.log(`[faceService] Cache saved with ${Object.keys(data.files).length} files`)
   } catch (err) {
-    console.error('[faceService] Failed to save cache:', err.message)
+    logger.error('[faceService] Failed to save cache:', err.message)
   }
 }
 
@@ -221,7 +222,7 @@ const buildFaceThumb = async (filePath, box) => {
     
     return target
   } catch (err) {
-    console.error('[faceService] buildFaceThumb failed:', err.message)
+    logger.error('[faceService] buildFaceThumb failed:', err.message)
     return null
   }
 }
@@ -252,89 +253,129 @@ const collectMedia = async (rootPath) => {
   return files
 }
 
-const createLimiter = (limit = 2) => {
+const createLimiter = (limit = 2, signal = null) => {
   let active = 0
   const queue = []
-  const runNext = () => {
-    if (!queue.length || active >= limit) return
-    const next = queue.shift()
-    active += 1
-    next()
+  let cancelledLogged = false
+  
+  const isCancelled = () => signal?.aborted === true
+  
+  const clearQueue = () => {
+    if (!cancelledLogged && queue.length > 0) {
+      logger.log(`[faceService] Limiter cancelled, clearing ${queue.length} queued tasks`)
+      cancelledLogged = true
+    }
+    // Clear the queue and resolve all pending with skipped flag
+    while (queue.length) {
+      const { resolve } = queue.shift()
+      resolve({ skipped: true })
+    }
   }
+  
+  const runNext = () => {
+    // Stop processing queue if cancelled
+    if (isCancelled()) {
+      clearQueue()
+      return
+    }
+    if (!queue.length || active >= limit) return
+    const { task, resolve, reject } = queue.shift()
+    active += 1
+    task().then(resolve).catch(reject).finally(() => {
+      active -= 1
+      runNext()
+    })
+  }
+  
+  // Listen for abort signal to immediately clear the queue
+  if (signal) {
+    signal.addEventListener('abort', () => {
+      logger.log('[faceService] Abort signal received, clearing queue immediately')
+      clearQueue()
+    }, { once: true })
+  }
+  
   return async (fn) =>
     new Promise((resolve, reject) => {
+      // If already cancelled, skip immediately
+      if (isCancelled()) {
+        resolve({ skipped: true })
+        return
+      }
+      
       const task = async () => {
+        // Double-check cancellation when task actually starts
+        if (isCancelled()) {
+          return { skipped: true }
+        }
         try {
           const res = await fn()
-          resolve(res)
+          return res
         } catch (err) {
-          console.error('[faceService] limiter task failed', err)
-          reject(err)
-        } finally {
-          active -= 1
-          runNext()
+          logger.error('[faceService] limiter task failed', err)
+          throw err
         }
       }
-      queue.push(task)
+      queue.push({ task, resolve, reject })
       runNext()
     })
 }
 
 const detectFacesInFile = async (filePath) => {
-  console.log('[faceService] detectFacesInFile:', filePath)
+  logger.log('[faceService] detectFacesInFile:', filePath)
   
   let tensorInput = null
   let canvas = null
   try {
     let img = null
     if (isImage(filePath)) {
-      console.log('[faceService] Loading image...')
+      logger.log('[faceService] Loading image...')
       img = await loadImage(filePath)
-      console.log('[faceService] Image loaded:', {
+      logger.log('[faceService] Image loaded:', {
         width: img?.width,
         height: img?.height,
         type: typeof img,
         constructor: img?.constructor?.name
       })
     } else if (isVideo(filePath)) {
-      console.log('[faceService] Extracting video frame...')
+      logger.log('[faceService] Extracting video frame...')
       const frame = await extractVideoFrame(filePath)
       if (frame) {
-        console.log('[faceService] Frame extracted, loading as image...')
+        logger.log('[faceService] Frame extracted, loading as image...')
         img = await loadImage(frame)
       }
     }
     
     if (img) {
       // Convert image to canvas then to tensor - face-api accepts tf.Tensor3D
-      console.log('[faceService] Converting image to canvas...')
+      logger.log('[faceService] Converting image to canvas...')
       canvas = imageToCanvas(img)
-      console.log('[faceService] Canvas created:', {
+      logger.log('[faceService] Canvas created:', {
         width: canvas?.width,
         height: canvas?.height
       })
       
-      console.log('[faceService] Converting canvas to tensor...')
+      logger.log('[faceService] Converting canvas to tensor...')
       tensorInput = canvasToTensor(canvas)
-      console.log('[faceService] Tensor created')
+      logger.log('[faceService] Tensor created')
     }
   } catch (err) {
-    console.error('[faceService] Failed to load image:', err.message, err.stack)
+    logger.error('[faceService] Failed to load image:', err.message, err.stack)
     return []
   }
 
   if (!tensorInput) {
-    console.log('[faceService] No tensor input, skipping')
+    logger.log('[faceService] No tensor input, skipping')
     return []
   }
 
   if (!faceapi) {
-    console.error('[faceService] faceapi not initialized!')
+    logger.error('[faceService] faceapi not initialized!')
     return []
   }
 
-  console.log('[faceService] Running face detection...')
-  console.log('[faceService] faceapi.SsdMobilenetv1Options:', typeof faceapi.SsdMobilenetv1Options)
+  logger.log('[faceService] Running face detection...')
+  logger.log('[faceService] faceapi.SsdMobilenetv1Options:', typeof faceapi.SsdMobilenetv1Options)
   
   try {
     const detections = await faceapi
@@ -342,7 +383,7 @@ const detectFacesInFile = async (filePath) => {
       .withFaceLandmarks()
       .withFaceDescriptors()
 
-    console.log('[faceService] Detection complete, found', detections.length, 'faces')
+    logger.log('[faceService] Detection complete, found', detections.length, 'faces')
     
     // Clean up tensor to prevent memory leak
     tensorInput.dispose()
@@ -368,7 +409,7 @@ const detectFacesInFile = async (filePath) => {
     
     return results
   } catch (err) {
-    console.error('[faceService] Face detection failed:', err.message, err.stack)
+    logger.error('[faceService] Face detection failed:', err.message, err.stack)
     return []
   }
 }
@@ -440,8 +481,11 @@ const clustersToFaces = (clusters) => {
 }
 
 const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
-  const { concurrency = 10 } = options
-  console.log('[faceService] scanFaces starting for:', sourcePath, 'concurrency:', concurrency)
+  const { concurrency = 10, signal = null } = options
+  logger.log('[faceService] scanFaces starting for:', sourcePath, 'concurrency:', concurrency)
+  
+  // Helper to check if scan was cancelled
+  const isCancelled = () => signal?.aborted === true
   
   const root = cleanPath(sourcePath)
   if (!root) throw new Error('sourcePath is required')
@@ -455,11 +499,11 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
   // Report: initializing
   if (onProgress) onProgress({ phase: 'init', message: 'מאתחל זיהוי פנים...' })
   
-  console.log('[faceService] Initializing face-api...')
+  logger.log('[faceService] Initializing face-api...')
   const { faceapi: api } = await initFaceApi()
   faceapi = api
-  console.log('[faceService] face-api initialized, faceapi:', typeof faceapi)
-  console.log('[faceService] faceapi.nets:', Object.keys(faceapi?.nets || {}))
+  logger.log('[faceService] face-api initialized, faceapi:', typeof faceapi)
+  logger.log('[faceService] faceapi.nets:', Object.keys(faceapi?.nets || {}))
 
   // Report: collecting files
   if (onProgress) onProgress({ phase: 'collect', message: 'אוסף קבצי מדיה...' })
@@ -469,13 +513,19 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
     if (onProgress) onProgress({ phase: 'done', current: 0, total: 0, facesFound: 0, faces: [] })
     return { faces: [], totalFiles: 0, groupCount: 0 }
   }
+  
+  // Check if cancelled after collecting files
+  if (isCancelled()) {
+    logger.log('[faceService] Scan cancelled after collecting files')
+    return { faces: [], totalFiles: 0, groupCount: 0, cancelled: true }
+  }
 
   // Load existing cache
   if (onProgress) onProgress({ phase: 'cache', message: 'בודק מטמון...' })
   const existingCache = await loadFaceCache(root)
   const { cached, toScan, removed } = await categorizeFiles(mediaFiles, existingCache)
   
-  console.log(`[faceService] Cache analysis: ${cached.length} cached, ${toScan.length} to scan, ${removed.length} removed`)
+  logger.log(`[faceService] Cache analysis: ${cached.length} cached, ${toScan.length} to scan, ${removed.length} removed`)
   
   // Prepare new cache object - start with existing cache data
   const newCacheFiles = existingCache?.files ? { ...existingCache.files } : {}
@@ -502,7 +552,7 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
     }
   }
 
-  const limiter = createLimiter(concurrency)
+  const limiter = createLimiter(concurrency, signal)
   let processed = 0
   const totalToScan = toScan.length
   const totalFiles = mediaFiles.length
@@ -577,6 +627,7 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
       sendProgressUpdate()
       
       const faces = await detectFacesInFile(file)
+      
       const normalizedPath = file.replace(/\\/g, '/')
       const mtime = await getFileMtime(file)
       
@@ -607,16 +658,37 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
       if (processed - lastCacheSave >= CACHE_SAVE_INTERVAL) {
         await saveFaceCache(root, { files: newCacheFiles })
         lastCacheSave = processed
-        console.log(`[faceService] Cache saved at ${processed}/${totalToScan} files`)
+        logger.log(`[faceService] Cache saved at ${processed}/${totalToScan} files`)
       }
       
       // Report progress
       sendProgressUpdate()
+      
+      return { processed: true }
     })
   )
   
-  // Wait for all scan tasks to complete
+  // Wait for all scan tasks to complete (some may be skipped due to cancellation)
   await Promise.all(scanPromises)
+  
+  // If cancelled, save cache and return partial results
+  if (isCancelled()) {
+    logger.log('[faceService] Scan was cancelled, saving cache for resume...')
+    await saveFaceCache(root, { files: newCacheFiles })
+    
+    const partialFaces = clustersToFaces(clusters)
+    return {
+      faces: partialFaces,
+      totalFiles: mediaFiles.length,
+      groupCount: partialFaces.length,
+      cancelled: true,
+      cacheStats: {
+        cached: cached.length,
+        scanned: processed,
+        removed: removed.length
+      }
+    }
+  }
 
   // Final cache save
   if (onProgress) onProgress({ phase: 'cache-save', message: 'שומר מטמון...' })

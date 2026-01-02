@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { scanFaces } from '../services/faceService.js'
+import logger from '../utils/logger.js'
 
 const facesRouter = Router()
 
@@ -14,7 +15,7 @@ facesRouter.post('/scan', async (req, res) => {
     if (err?.code === 'ENOENT') {
       return res.status(400).json({ error: err.message })
     }
-    console.error('[ROUTE /api/faces/scan] failed', {
+    logger.error('[ROUTE /api/faces/scan] failed', {
       body: req.body,
       error: err?.message,
       stack: err?.stack,
@@ -39,11 +40,15 @@ facesRouter.get('/scan-stream', async (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no') // Disable nginx buffering
   res.flushHeaders()
   
-  // Track if client disconnected
+  // Create AbortController to signal cancellation to the scan service
+  const abortController = new AbortController()
+  
+  // Track if client disconnected and abort the scan
   let clientDisconnected = false
   req.on('close', () => {
     clientDisconnected = true
-    console.log('[SSE] Client disconnected')
+    abortController.abort() // Signal the scan to stop
+    logger.log('[SSE] Client disconnected, aborting scan')
   })
   
   // Send progress updates via SSE
@@ -62,19 +67,22 @@ facesRouter.get('/scan-stream', async (req, res) => {
   }
   
   try {
-    const result = await scanFaces(sourcePath, sendProgress, { concurrency: concurrencyNum })
+    const result = await scanFaces(sourcePath, sendProgress, { 
+      concurrency: concurrencyNum,
+      signal: abortController.signal 
+    })
     
     if (clientDisconnected) {
-      console.log('[SSE] Scan completed but client already disconnected')
+      logger.log('[SSE] Scan completed/cancelled but client already disconnected')
       return
     }
     
-    // Send final result
+    // Send final result (even if cancelled, send what we have)
     res.write(`event: result\ndata: ${JSON.stringify(result)}\n\n`)
     res.write(`event: close\ndata: {}\n\n`)
     res.end()
   } catch (err) {
-    console.error('[ROUTE /api/faces/scan-stream] failed', {
+    logger.error('[ROUTE /api/faces/scan-stream] failed', {
       sourcePath,
       error: err?.message,
       stack: err?.stack,

@@ -7,6 +7,7 @@ import crypto from 'node:crypto'
 import sharp from 'sharp'
 import ffmpegPath from 'ffmpeg-static'
 import { cleanPath, isImage, isVideo, isMedia } from './fileService.js'
+import logger from '../utils/logger.js'
 
 // פרמטרים להגדרת איכות / דיוק
 const HASH_WIDTH = 9
@@ -66,7 +67,7 @@ const createLimiter = (limit = 4) => {
           const res = await fn()
           resolve(res)
         } catch (err) {
-          console.error('[duplicateService] limiter task failed', err)
+          logger.error('[duplicateService] limiter task failed', err)
           reject(err)
         } finally {
           active -= 1

@@ -6,6 +6,7 @@ import { getPosterPath } from '../services/posterService.js'
 import mime from 'mime-types'
 import duplicatesRouter from './duplicates.js'
 import facesRouter from './faces.js'
+import logger from '../utils/logger.js'
 
 const router = Router()
 
@@ -20,7 +21,7 @@ router.post('/scan', async (req, res) => {
     const result = await scanFolder(sourcePath)
     res.json(result)
   } catch (err) {
-    console.error('[ROUTE /api/scan] failed', {
+    logger.error('[ROUTE /api/scan] failed', {
       body: req.body,
       error: err?.message,
       stack: err?.stack,
@@ -36,7 +37,7 @@ router.post('/delete', async (req, res) => {
     await deleteFile(targetPath)
     res.json({ success: true })
   } catch (err) {
-    console.error('[ROUTE /api/delete] failed', {
+    logger.error('[ROUTE /api/delete] failed', {
       body: req.body,
       error: err?.message,
       stack: err?.stack,
@@ -52,7 +53,7 @@ router.post('/create-folder', async (req, res) => {
     await createFolder(targetPath)
     res.json({ success: true })
   } catch (err) {
-    console.error('[ROUTE /api/create-folder] failed', {
+    logger.error('[ROUTE /api/create-folder] failed', {
       body: req.body,
       error: err?.message,
       stack: err?.stack,
@@ -70,7 +71,7 @@ router.post('/exif', async (req, res) => {
     const data = await readExif(targetPath)
     res.json(data)
   } catch (err) {
-    console.error('[ROUTE /api/exif] failed', {
+    logger.error('[ROUTE /api/exif] failed', {
       body: req.body,
       error: err?.message,
       stack: err?.stack,
@@ -86,7 +87,7 @@ router.post('/sort', async (req, res) => {
     const result = await sortFile({ src, destRoot, format, mode })
     res.json(result)
   } catch (err) {
-    console.error('[ROUTE /api/sort] failed', {
+    logger.error('[ROUTE /api/sort] failed', {
       body: req.body,
       error: err?.message,
       stack: err?.stack,
@@ -141,7 +142,7 @@ router.get('/file', async (req, res) => {
       res.status(500).end(err.message)
     })
   } catch (err) {
-    console.error('[ROUTE /api/file] failed', {
+    logger.error('[ROUTE /api/file] failed', {
       query: req.query,
       error: err?.message,
       stack: err?.stack,
@@ -164,7 +165,7 @@ router.get('/poster', async (req, res) => {
     }
     return res.sendFile(path.resolve(posterPath))
   } catch (err) {
-    console.error('[ROUTE /api/poster] failed', {
+    logger.error('[ROUTE /api/poster] failed', {
       query: req.query,
       error: err?.message,
       stack: err?.stack,

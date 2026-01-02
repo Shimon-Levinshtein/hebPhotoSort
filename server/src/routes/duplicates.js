@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { findDuplicates } from '../services/duplicateService.js'
+import logger from '../utils/logger.js'
 
 const duplicatesRouter = Router()
 
@@ -10,7 +11,7 @@ duplicatesRouter.post('/', async (req, res) => {
     const groups = await findDuplicates(sourcePath)
     res.json({ groups, count: groups.length })
   } catch (err) {
-    console.error('[ROUTE /api/duplicates] failed', {
+    logger.error('[ROUTE /api/duplicates] failed', {
       body: req.body,
       error: err?.message,
       stack: err?.stack,
