@@ -328,30 +328,46 @@ const FaceSearchPage = () => {
             )}
             {/* Active files being processed in parallel */}
             {progress.activeFiles && progress.activeFiles.length > 0 && (
-              <div className="mt-2 space-y-1">
+              <div className="mt-3 space-y-2">
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-500"></span>
                   <span>מעבד כעת {progress.activeCount} קבצים במקביל:</span>
                 </div>
-                <div className="grid gap-1 rounded-lg border border-slate-700/50 bg-slate-950/50 p-2">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                   {progress.activeFiles.map((file) => {
                     const elapsedSec = Math.round((now - file.startTime) / 1000)
                     return (
                       <div 
                         key={file.filename}
-                        className="flex items-center justify-between gap-2 text-xs"
+                        className="group relative overflow-hidden rounded-lg border border-slate-700/50 bg-slate-950/50"
                       >
-                        <div className="flex items-center gap-2 truncate text-slate-300">
-                          <span className="inline-flex h-1.5 w-1.5 animate-spin rounded-full border border-sky-400 border-t-transparent"></span>
-                          <span className="truncate" title={file.path}>{file.filename}</span>
+                        {/* Image Preview */}
+                        <div className="relative aspect-square overflow-hidden bg-slate-800">
+                          <LazyImage
+                            src={file.path}
+                            alt={file.filename}
+                            className="h-full w-full"
+                            imgClassName="h-full w-full object-cover"
+                            placeholderClassName="h-full w-full"
+                          />
+                          {/* Processing overlay */}
+                          <div className="absolute inset-0 flex items-center justify-center bg-slate-900/40">
+                            <div className="h-8 w-8 animate-spin rounded-full border-2 border-sky-400 border-t-transparent"></div>
+                          </div>
                         </div>
-                        <span className={`shrink-0 font-mono ${
-                          elapsedSec >= 10 ? 'text-amber-400' : 
-                          elapsedSec >= 5 ? 'text-yellow-400' : 
-                          'text-slate-500'
-                        }`}>
-                          {elapsedSec}s
-                        </span>
+                        {/* File info */}
+                        <div className="p-2">
+                          <p className="truncate text-xs text-slate-300" title={file.path}>
+                            {file.filename}
+                          </p>
+                          <span className={`text-xs font-mono ${
+                            elapsedSec >= 10 ? 'text-amber-400' : 
+                            elapsedSec >= 5 ? 'text-yellow-400' : 
+                            'text-slate-500'
+                          }`}>
+                            {elapsedSec}s
+                          </span>
+                        </div>
                       </div>
                     )
                   })}
