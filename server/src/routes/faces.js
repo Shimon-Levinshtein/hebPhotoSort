@@ -25,7 +25,8 @@ facesRouter.post('/scan', async (req, res) => {
 
 // SSE endpoint for progress updates with incremental face results
 facesRouter.get('/scan-stream', async (req, res) => {
-  const { sourcePath } = req.query
+  const { sourcePath, concurrency } = req.query
+  const concurrencyNum = Math.min(20, Math.max(1, parseInt(concurrency, 10) || 10))
   
   if (!sourcePath) {
     return res.status(400).json({ error: 'sourcePath is required' })
@@ -61,7 +62,7 @@ facesRouter.get('/scan-stream', async (req, res) => {
   }
   
   try {
-    const result = await scanFaces(sourcePath, sendProgress)
+    const result = await scanFaces(sourcePath, sendProgress, { concurrency: concurrencyNum })
     
     if (clientDisconnected) {
       console.log('[SSE] Scan completed but client already disconnected')

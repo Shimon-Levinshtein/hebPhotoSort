@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useRef } from 'react'
+import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import FolderPicker from '@/components/FolderPicker'
 import LazyImage from '@/components/LazyImage'
 import LightboxModal from '@/components/LightboxModal'
@@ -19,6 +19,22 @@ const FaceSearchPage = () => {
   // Progress state
   const [progress, setProgress] = useState(null)
   const eventSourceRef = useRef(null)
+  
+  // Concurrency setting (how many files to process in parallel)
+  const [concurrency, setConcurrency] = useState(10)
+  
+  // Current time for elapsed calculation (updates every second when loading)
+  const [now, setNow] = useState(Date.now())
+  
+  useEffect(() => {
+    if (!loading || !progress?.activeFiles?.length) return
+    
+    const interval = setInterval(() => {
+      setNow(Date.now())
+    }, 1000)
+    
+    return () => clearInterval(interval)
+  }, [loading, progress?.activeFiles?.length])
 
   const filteredFaces = useMemo(() => {
     const term = filter.trim().toLowerCase()
@@ -80,7 +96,7 @@ const FaceSearchPage = () => {
     
     return new Promise((resolve) => {
       const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000'
-      const url = `${apiBase}/api/faces/scan-stream?sourcePath=${encodeURIComponent(pathToScan)}`
+      const url = `${apiBase}/api/faces/scan-stream?sourcePath=${encodeURIComponent(pathToScan)}&concurrency=${concurrency}`
       
       const eventSource = new EventSource(url)
       eventSourceRef.current = eventSource
@@ -260,6 +276,19 @@ const FaceSearchPage = () => {
               disabled={loading || !faces.length}
             />
           </div>
+          <div className="flex items-center gap-2 text-sm text-slate-200">
+            <span>במקביל:</span>
+            <input
+              type="range"
+              min="1"
+              max="20"
+              value={concurrency}
+              onChange={(e) => setConcurrency(Number(e.target.value))}
+              className="h-2 w-24 cursor-pointer appearance-none rounded-lg bg-slate-800 accent-sky-500"
+              disabled={loading}
+            />
+            <span className="w-6 text-center font-mono text-sky-400">{concurrency}</span>
+          </div>
         </div>
         
         {/* Progress indicator */}
@@ -297,9 +326,36 @@ const FaceSearchPage = () => {
                 />
               </div>
             )}
-            {progress.currentFile && (
-              <div className="truncate text-xs text-slate-500" title={progress.currentFile}>
-                📄 {progress.currentFile}
+            {/* Active files being processed in parallel */}
+            {progress.activeFiles && progress.activeFiles.length > 0 && (
+              <div className="mt-2 space-y-1">
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-500"></span>
+                  <span>מעבד כעת {progress.activeCount} קבצים במקביל:</span>
+                </div>
+                <div className="grid gap-1 rounded-lg border border-slate-700/50 bg-slate-950/50 p-2">
+                  {progress.activeFiles.map((file) => {
+                    const elapsedSec = Math.round((now - file.startTime) / 1000)
+                    return (
+                      <div 
+                        key={file.filename}
+                        className="flex items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="flex items-center gap-2 truncate text-slate-300">
+                          <span className="inline-flex h-1.5 w-1.5 animate-spin rounded-full border border-sky-400 border-t-transparent"></span>
+                          <span className="truncate" title={file.path}>{file.filename}</span>
+                        </div>
+                        <span className={`shrink-0 font-mono ${
+                          elapsedSec >= 10 ? 'text-amber-400' : 
+                          elapsedSec >= 5 ? 'text-yellow-400' : 
+                          'text-slate-500'
+                        }`}>
+                          {elapsedSec}s
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
             {/* Resume hint */}

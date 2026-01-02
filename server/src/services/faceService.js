@@ -16,7 +16,7 @@ const THUMB_SIZE = 220
 const MAX_SAMPLES = 96
 const MAX_RESULTS_PER_FACE = 96
 const FACE_DISTANCE_THRESHOLD = 0.52
-const MAX_CONCURRENCY = 2
+const MAX_CONCURRENCY = 10
 const CACHE_VERSION = 1
 const CACHE_FILENAME = '.hebphotosort-faces.json'
 
@@ -439,8 +439,9 @@ const clustersToFaces = (clusters) => {
   return faces
 }
 
-const scanFaces = async (sourcePath, onProgress = null) => {
-  console.log('[faceService] scanFaces starting for:', sourcePath)
+const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
+  const { concurrency = 10 } = options
+  console.log('[faceService] scanFaces starting for:', sourcePath, 'concurrency:', concurrency)
   
   const root = cleanPath(sourcePath)
   if (!root) throw new Error('sourcePath is required')
@@ -501,7 +502,7 @@ const scanFaces = async (sourcePath, onProgress = null) => {
     }
   }
 
-  const limiter = createLimiter(MAX_CONCURRENCY)
+  const limiter = createLimiter(concurrency)
   let processed = 0
   const totalToScan = toScan.length
   const totalFiles = mediaFiles.length
@@ -535,10 +536,46 @@ const scanFaces = async (sourcePath, onProgress = null) => {
   // Track when to save cache (save every N files for efficiency)
   const CACHE_SAVE_INTERVAL = 5
   let lastCacheSave = 0
+  
+  // Track currently processing files with their start times
+  const activeFiles = new Map() // filename -> { startTime, path }
+  
+  // Helper to send progress with active files info
+  const sendProgressUpdate = () => {
+    if (!onProgress) return
+    
+    // Send startTime to client - let client calculate elapsed time for smooth updates
+    const activeFilesInfo = Array.from(activeFiles.entries()).map(([filename, info]) => ({
+      filename,
+      path: info.path,
+      startTime: info.startTime // Client will calculate elapsed time
+    }))
+    
+    const currentFaces = clustersToFaces(clusters)
+    onProgress({ 
+      phase: 'scan', 
+      current: cached.length + processed, 
+      total: totalFiles, 
+      facesFound: clusters.length,
+      cached: cached.length,
+      scanned: processed,
+      toScan: totalToScan,
+      activeFiles: activeFilesInfo,
+      activeCount: activeFilesInfo.length,
+      message: `סורק ${processed}/${totalToScan} קבצים חדשים...`,
+      faces: currentFaces
+    })
+  }
 
-  // Scan only new/modified files
-  for (const file of toScan) {
-    await limiter(async () => {
+  // Scan only new/modified files - queue all tasks at once for true parallelism
+  const scanPromises = toScan.map(file => 
+    limiter(async () => {
+      const filename = path.basename(file)
+      
+      // Track start of processing
+      activeFiles.set(filename, { startTime: Date.now(), path: file })
+      sendProgressUpdate()
+      
       const faces = await detectFacesInFile(file)
       const normalizedPath = file.replace(/\\/g, '/')
       const mtime = await getFileMtime(file)
@@ -562,6 +599,8 @@ const scanFaces = async (sourcePath, onProgress = null) => {
       // Add to clusters
       faces.slice(0, MAX_SAMPLES).forEach((faceSample) => assignToClusters(clusters, faceSample))
       
+      // Remove from active files
+      activeFiles.delete(filename)
       processed += 1
       
       // Save cache periodically (every CACHE_SAVE_INTERVAL files) for resume capability
@@ -571,24 +610,13 @@ const scanFaces = async (sourcePath, onProgress = null) => {
         console.log(`[faceService] Cache saved at ${processed}/${totalToScan} files`)
       }
       
-      // Report progress every file with current faces
-      if (onProgress) {
-        const currentFaces = clustersToFaces(clusters)
-        onProgress({ 
-          phase: 'scan', 
-          current: cached.length + processed, 
-          total: totalFiles, 
-          facesFound: clusters.length,
-          cached: cached.length,
-          scanned: processed,
-          toScan: totalToScan,
-          currentFile: path.basename(file),
-          message: `סורק ${processed}/${totalToScan} קבצים חדשים...`,
-          faces: currentFaces // Send updated faces with each progress update
-        })
-      }
+      // Report progress
+      sendProgressUpdate()
     })
-  }
+  )
+  
+  // Wait for all scan tasks to complete
+  await Promise.all(scanPromises)
 
   // Final cache save
   if (onProgress) onProgress({ phase: 'cache-save', message: 'שומר מטמון...' })
