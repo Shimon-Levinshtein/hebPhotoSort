@@ -1,9 +1,83 @@
 import { useState, useCallback, useMemo } from 'react'
+import { HDate } from '@hebcal/core'
 import FolderPicker from '@/components/FolderPicker'
 import LazyImage from '@/components/LazyImage'
 import LightboxModal from '@/components/LightboxModal'
 import { useAppStore } from '@/store/appStore'
 import { useToastStore } from '@/store/toastStore'
+
+// Helper functions for date formatting (used in both modal and main component)
+const toHebrewDateHelper = (date) => {
+  if (!date) return null
+  try {
+    const dateObj = date instanceof Date ? date : new Date(date)
+    if (isNaN(dateObj.getTime())) return null
+    
+    const hd = new HDate(dateObj)
+    return hd.renderGematriya() // למשל: כ״ד ניסן תשפ״ה
+  } catch {
+    return null
+  }
+}
+
+const getTimezoneOffsetHelper = (date) => {
+  if (!date) return null
+  try {
+    const dateObj = date instanceof Date ? date : new Date(date)
+    if (isNaN(dateObj.getTime())) return null
+    
+    const offset = -dateObj.getTimezoneOffset()
+    const sign = offset >= 0 ? '+' : '-'
+    const hours = Math.floor(Math.abs(offset) / 60).toString().padStart(2, '0')
+    const minutes = (Math.abs(offset) % 60).toString().padStart(2, '0')
+    return `${sign}${hours}:${minutes}`
+  } catch {
+    return null
+  }
+}
+
+const formatDateWithHebrew = (isoStr, hebrewDate = null, timezone = null) => {
+  if (!isoStr) return '—'
+  try {
+    const dateObj = new Date(isoStr)
+    if (isNaN(dateObj.getTime())) return isoStr
+    
+    const gregorian = dateObj.toLocaleString('he-IL')
+    const hebrew = hebrewDate || toHebrewDateHelper(dateObj)
+    const tz = timezone || getTimezoneOffsetHelper(dateObj)
+    
+    let result = gregorian
+    if (hebrew) {
+      result += ` (${hebrew})`
+    }
+    if (tz) {
+      result += ` [${tz}]`
+    }
+    
+    return result
+  } catch {
+    return isoStr
+  }
+}
+
+// Helper function to format duration (used in both modal and main component)
+const formatDurationHelper = (ms) => {
+  if (ms == null) return '—'
+  
+  const totalSeconds = Math.floor(ms / 1000)
+  const milliseconds = ms % 1000
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  
+  // Format: HH:MM:SS.MS (always full format)
+  const hoursStr = hours.toString().padStart(2, '0')
+  const minutesStr = minutes.toString().padStart(2, '0')
+  const secondsStr = seconds.toString().padStart(2, '0')
+  const msStr = milliseconds.toString().padStart(3, '0')
+  
+  return `${hoursStr}:${minutesStr}:${secondsStr}.${msStr}`
+}
 
 // Modal for showing all file details
 const FileDetailsModal = ({ file, onClose }) => {
@@ -107,12 +181,12 @@ const FileDetailsModal = ({ file, onClose }) => {
 
           {/* Dates */}
           <Section title="📅 תאריכים">
-            <Row label="תאריך צילום" value={file.dates?.taken ? new Date(file.dates.taken).toLocaleString('he-IL') : null} />
-            <Row label="תאריך דיגיטציה" value={file.dates?.digitized ? new Date(file.dates.digitized).toLocaleString('he-IL') : null} />
-            <Row label="תאריך עריכה" value={file.dates?.modified ? new Date(file.dates.modified).toLocaleString('he-IL') : null} />
-            <Row label="יצירת קובץ" value={file.fileCreated ? new Date(file.fileCreated).toLocaleString('he-IL') : null} />
-            <Row label="שינוי קובץ" value={file.fileModified ? new Date(file.fileModified).toLocaleString('he-IL') : null} />
-            <Row label="אזור זמן" value={file.dates?.offsetTimeOriginal} />
+            <Row label="תאריך צילום" value={file.dates?.taken ? formatDateWithHebrew(file.dates.taken, file.dates?.takenHebrew?.full, file.dates?.takenTimezone) : null} />
+            <Row label="תאריך דיגיטציה" value={file.dates?.digitized ? formatDateWithHebrew(file.dates.digitized, file.dates?.digitizedHebrew?.full, file.dates?.digitizedTimezone) : null} />
+            <Row label="תאריך עריכה" value={file.dates?.modified ? formatDateWithHebrew(file.dates.modified, file.dates?.modifiedHebrew?.full, file.dates?.modifiedTimezone) : null} />
+            <Row label="יצירת קובץ" value={file.fileCreated ? formatDateWithHebrew(file.fileCreated, file.fileCreatedHebrew?.full, file.fileCreatedTimezone) : null} />
+            <Row label="שינוי קובץ" value={file.fileModified ? formatDateWithHebrew(file.fileModified, file.fileModifiedHebrew?.full, file.fileModifiedTimezone) : null} />
+            <Row label="אזור זמן (EXIF)" value={file.dates?.offsetTimeOriginal || file.dates?.offsetTime || null} />
           </Section>
 
           {/* GPS */}
@@ -164,8 +238,8 @@ const FileDetailsModal = ({ file, onClose }) => {
 
           {/* Scan Info */}
           <Section title="🔬 סריקה">
-            <Row label="נסרק בתאריך" value={file.scannedAt ? new Date(file.scannedAt).toLocaleString('he-IL') : null} />
-            <Row label="זמן עיבוד" value={file.processingTime ? `${file.processingTime}ms` : null} />
+            <Row label="נסרק בתאריך" value={file.scannedAt ? formatDateWithHebrew(file.scannedAt, file.scannedAtHebrew?.full, file.scannedAtTimezone) : null} />
+            <Row label="זמן עיבוד" value={file.processingTime ? formatDurationHelper(file.processingTime) : null} />
             <Row label="פנים שזוהו" value={file.facesCount} />
           </Section>
         </div>
@@ -335,19 +409,11 @@ const ScanHistoryPage = () => {
   }, [history?.files, sortBy, sortDir, filterFaces, filterType, filterSource])
 
   const formatDuration = (ms) => {
-    if (ms == null) return '—'
-    if (ms < 1000) return `${ms}ms`
-    const sec = (ms / 1000).toFixed(1)
-    return `${sec}s`
+    return formatDurationHelper(ms)
   }
 
-  const formatDate = (isoStr) => {
-    if (!isoStr) return '—'
-    try {
-      return new Date(isoStr).toLocaleString('he-IL')
-    } catch {
-      return isoStr
-    }
+  const formatDate = (isoStr, hebrewDate = null, timezone = null) => {
+    return formatDateWithHebrew(isoStr, hebrewDate, timezone)
   }
 
   const formatFileSize = (bytes) => {
@@ -740,7 +806,7 @@ const ScanHistoryPage = () => {
                       )}
                       {file.exif.dateTaken && (
                         <span className="inline-flex items-center rounded-full bg-cyan-900/50 px-2 py-0.5 text-cyan-300">
-                          📅 {formatDate(file.exif.dateTaken)}
+                          📅 {formatDate(file.exif.dateTaken, file.dates?.takenHebrew?.full, file.dates?.takenTimezone)}
                         </span>
                       )}
                     </div>
@@ -778,7 +844,7 @@ const ScanHistoryPage = () => {
                   </div>
 
                   {file.scannedAt && (
-                    <p className="text-xs text-slate-500">נסרק: {formatDate(file.scannedAt)}</p>
+                    <p className="text-xs text-slate-500">נסרק: {formatDate(file.scannedAt, file.scannedAtHebrew?.full, file.scannedAtTimezone)}</p>
                   )}
 
                   {/* Details button */}

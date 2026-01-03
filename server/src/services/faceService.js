@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process'
 import sharp from 'sharp'
 import ffmpegPath from 'ffmpeg-static'
 import exif from 'exif-parser'
+import { HDate } from '@hebcal/core'
 import { cleanPath, isImage, isVideo, isMedia } from './fileService.js'
 import { initFaceApi, loadImage, imageToCanvas, canvasToTensor } from './faceModel.js'
 import logger from '../utils/logger.js'
@@ -117,6 +118,63 @@ const meteringModeToHebrew = (code) => {
     255: 'אחר'
   }
   return modes[code] || `קוד ${code}`
+}
+
+/**
+ * Convert date to Hebrew date format
+ * @param {Date|string} date - Date object or ISO string
+ * @returns {object|null} Hebrew date info or null if invalid
+ */
+const toHebrewDate = (date) => {
+  if (!date) return null
+  try {
+    const dateObj = date instanceof Date ? date : new Date(date)
+    if (isNaN(dateObj.getTime())) return null
+    
+    const hd = new HDate(dateObj)
+    const full = hd.renderGematriya() // למשל: כ״ד ניסן תשפ״ה
+    const parts = full.split(' ')
+    const monthNum = hd.getMonth()
+    const HEB_MONTHS = {
+      1: 'ניסן', 2: 'אייר', 3: 'סיון', 4: 'תמוז', 5: 'אב', 6: 'אלול',
+      7: 'תשרי', 8: 'חשוון', 9: 'כסלו', 10: 'טבת', 11: 'שבט', 12: 'אדר', 13: 'אדר ב׳'
+    }
+    const month = HEB_MONTHS[monthNum] || hd.getMonthName()
+    const yearRaw = parts[parts.length - 1] || hd.getFullYear()
+    const day = hd.getDate()
+    
+    return {
+      full,
+      year: yearRaw,
+      month,
+      day,
+      monthNum
+    }
+  } catch (err) {
+    logger.error('[faceService] Failed to convert to Hebrew date', { date, error: err.message })
+    return null
+  }
+}
+
+/**
+ * Get timezone offset string (e.g., "+03:00", "-05:00")
+ * @param {Date|string} date - Date object or ISO string
+ * @returns {string|null} Timezone offset string
+ */
+const getTimezoneOffset = (date) => {
+  if (!date) return null
+  try {
+    const dateObj = date instanceof Date ? date : new Date(date)
+    if (isNaN(dateObj.getTime())) return null
+    
+    const offset = -dateObj.getTimezoneOffset()
+    const sign = offset >= 0 ? '+' : '-'
+    const hours = Math.floor(Math.abs(offset) / 60).toString().padStart(2, '0')
+    const minutes = (Math.abs(offset) % 60).toString().padStart(2, '0')
+    return `${sign}${hours}:${minutes}`
+  } catch (err) {
+    return null
+  }
 }
 
 /**
@@ -277,9 +335,24 @@ const getFileMetadata = async (filePath) => {
     // Get file size and filesystem dates
     const stat = await fs.stat(filePath)
     metadata.fileSize = stat.size
-    metadata.fileCreated = stat.birthtime?.toISOString() || null
-    metadata.fileModified = stat.mtime?.toISOString() || null
-    metadata.fileAccessed = stat.atime?.toISOString() || null
+    
+    // File system dates with Hebrew and timezone
+    const fileCreatedDate = stat.birthtime || null
+    const fileModifiedDate = stat.mtime || null
+    const fileAccessedDate = stat.atime || null
+    
+    metadata.fileCreated = fileCreatedDate?.toISOString() || null
+    metadata.fileModified = fileModifiedDate?.toISOString() || null
+    metadata.fileAccessed = fileAccessedDate?.toISOString() || null
+    
+    // Add Hebrew dates and timezone for file system dates
+    metadata.fileCreatedHebrew = fileCreatedDate ? toHebrewDate(fileCreatedDate) : null
+    metadata.fileModifiedHebrew = fileModifiedDate ? toHebrewDate(fileModifiedDate) : null
+    metadata.fileAccessedHebrew = fileAccessedDate ? toHebrewDate(fileAccessedDate) : null
+    
+    metadata.fileCreatedTimezone = fileCreatedDate ? getTimezoneOffset(fileCreatedDate) : null
+    metadata.fileModifiedTimezone = fileModifiedDate ? getTimezoneOffset(fileModifiedDate) : null
+    metadata.fileAccessedTimezone = fileAccessedDate ? getTimezoneOffset(fileAccessedDate) : null
     
     // Get image dimensions and EXIF data
     if (isImage(filePath)) {
@@ -421,23 +494,35 @@ const getFileMetadata = async (filePath) => {
           }
           
           // ========== DATES ==========
+          const takenDate = tags.DateTimeOriginal 
+            ? new Date(tags.DateTimeOriginal * 1000)
+            : null
+          const digitizedDate = tags.CreateDate || tags.DateTimeDigitized
+            ? new Date((tags.CreateDate || tags.DateTimeDigitized) * 1000)
+            : null
+          const modifiedDate = tags.ModifyDate || tags.DateTime
+            ? new Date((tags.ModifyDate || tags.DateTime) * 1000)
+            : null
+          
           metadata.dates = {
-            taken: tags.DateTimeOriginal 
-              ? new Date(tags.DateTimeOriginal * 1000).toISOString() 
-              : null,
-            digitized: tags.CreateDate || tags.DateTimeDigitized
-              ? new Date((tags.CreateDate || tags.DateTimeDigitized) * 1000).toISOString()
-              : null,
-            modified: tags.ModifyDate || tags.DateTime
-              ? new Date((tags.ModifyDate || tags.DateTime) * 1000).toISOString()
-              : null,
+            taken: takenDate?.toISOString() || null,
+            digitized: digitizedDate?.toISOString() || null,
+            modified: modifiedDate?.toISOString() || null,
+            // Hebrew dates
+            takenHebrew: takenDate ? toHebrewDate(takenDate) : null,
+            digitizedHebrew: digitizedDate ? toHebrewDate(digitizedDate) : null,
+            modifiedHebrew: modifiedDate ? toHebrewDate(modifiedDate) : null,
             // Sub-second precision
             subSecTimeOriginal: tags.SubSecTimeOriginal || null,
             subSecTimeDigitized: tags.SubSecTimeDigitized || null,
             // Timezone offset
             offsetTime: tags.OffsetTime || null,
             offsetTimeOriginal: tags.OffsetTimeOriginal || null,
-            offsetTimeDigitized: tags.OffsetTimeDigitized || null
+            offsetTimeDigitized: tags.OffsetTimeDigitized || null,
+            // Timezone from date object
+            takenTimezone: takenDate ? getTimezoneOffset(takenDate) : null,
+            digitizedTimezone: digitizedDate ? getTimezoneOffset(digitizedDate) : null,
+            modifiedTimezone: modifiedDate ? getTimezoneOffset(modifiedDate) : null
           }
           
           // ========== GPS DATA ==========
@@ -1209,10 +1294,18 @@ const scanFaces = async (sourcePath, onProgress = null, options = {}) => {
       // Get additional file metadata
       const fileMeta = await getFileMetadata(file)
       
+      // Get scan date with Hebrew and timezone
+      const scanDate = new Date()
+      const scannedAtISO = scanDate.toISOString()
+      const scannedAtHebrew = toHebrewDate(scanDate)
+      const scannedAtTimezone = getTimezoneOffset(scanDate)
+      
       // Store in cache (convert Float32Array to regular array for JSON)
       newCacheFiles[normalizedPath] = {
         mtime,
-        scannedAt: new Date().toISOString(),
+        scannedAt: scannedAtISO,
+        scannedAtHebrew: scannedAtHebrew,
+        scannedAtTimezone: scannedAtTimezone,
         processingTime, // Duration in ms
         facesCount: faces.length,
         // File metadata
@@ -1372,13 +1465,21 @@ const getScanHistory = async (sourcePath) => {
     filename: path.basename(filePath),
     mtime: data.mtime,
     scannedAt: data.scannedAt || null,
+    scannedAtHebrew: data.scannedAtHebrew || null,
+    scannedAtTimezone: data.scannedAtTimezone || null,
     processingTime: data.processingTime || null,
     facesCount: data.facesCount ?? data.faces?.length ?? 0,
     // File metadata
     fileSize: data.fileSize || null,
     fileCreated: data.fileCreated || null,
+    fileCreatedHebrew: data.fileCreatedHebrew || null,
+    fileCreatedTimezone: data.fileCreatedTimezone || null,
     fileModified: data.fileModified || null,
+    fileModifiedHebrew: data.fileModifiedHebrew || null,
+    fileModifiedTimezone: data.fileModifiedTimezone || null,
     fileAccessed: data.fileAccessed || null,
+    fileAccessedHebrew: data.fileAccessedHebrew || null,
+    fileAccessedTimezone: data.fileAccessedTimezone || null,
     width: data.width || null,
     height: data.height || null,
     extension: data.extension || path.extname(filePath).toLowerCase(),
