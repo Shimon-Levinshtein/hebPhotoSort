@@ -5,6 +5,7 @@ import ImageGrid from '@/components/ImageGrid'
 import LightboxModal from '@/components/LightboxModal'
 import SortingControls from '@/components/SortingControls'
 import ProgressBar from '@/components/ProgressBar'
+import PerformanceMonitor from '@/components/PerformanceMonitor'
 import useApi from '@/hooks/useApi'
 import { useAppStore } from '@/store/appStore'
 import { useToastStore } from '@/store/toastStore'
@@ -57,11 +58,58 @@ const SortPage = () => {
   const handleSelectImage = (idx) => setCurrentIndex(idx)
 
   const handleSelectSource = async () => {
+    // Try Electron folder dialog first
+    try {
+      if (window.electronAPI?.openFolderDialog) {
+        const picked = await window.electronAPI.openFolderDialog()
+        if (picked) {
+          setSourcePath(picked)
+          try {
+            const res = await scanFolder(picked)
+            setImages(res.files || [])
+            if (res.error) {
+              addToast({ title: 'שגיאה בסריקה', description: res.error, variant: 'error' })
+            } else {
+              addToast({
+                title: 'תיקיית מקור נבחרה',
+                description: `${picked} (${res.count || 0} קבצי מדיה נתמכים)`,
+                variant: 'success',
+              })
+              if (!res.count) {
+                addToast({
+                  title: 'אין קבצי מדיה',
+                  description: 'התיקייה שנבחרה ריקה או ללא תמונות/וידאו נתמכים',
+                  variant: 'error',
+                })
+              }
+            }
+          } catch (err) {
+            addToast({ title: 'שגיאה בסריקה', description: err.message, variant: 'error' })
+          }
+          return
+        }
+      }
+    } catch (err) {
+      console.error('[SortPage] electron folder dialog failed', err)
+    }
+
+    // Fallback to manual input
     const chosenRaw =
       sourcePath ||
-      window.prompt('הכנס נתיב לתיקיית מקור (לדוגמה: C:\\Photos\\Unsorted)') ||
+      window.prompt('הכנס נתיב מלא לתיקיית מקור (לדוגמה: C:\\Photos\\Unsorted)') ||
       ''
     const chosen = chosenRaw.trim()
+    
+    // Validate that it's an absolute path
+    if (chosen && !chosen.match(/^[A-Za-z]:[\\/]/) && !chosen.startsWith('/')) {
+      addToast({
+        title: 'נתיב לא תקין',
+        description: 'אנא הזן נתיב מלא (לדוגמה: C:\\Photos\\למיון - Copy - Copy)',
+        variant: 'error',
+      })
+      return
+    }
+    
     try {
       if (chosen) {
         setSourcePath(chosen)
@@ -397,6 +445,9 @@ const SortPage = () => {
         current={isSorting ? sortProgress.current : sortedCount} 
         total={isSorting ? sortProgress.total : total} 
       />
+
+      {/* System Performance Monitor - shown during sorting */}
+      {isSorting && <PerformanceMonitor enabled={isSorting} interval={1000} />}
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-200">
         {statusText}

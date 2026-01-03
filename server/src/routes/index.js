@@ -3,6 +3,7 @@ import fssync from 'node:fs'
 import path from 'node:path'
 import { scanFolder, deleteFile, createFolder, readExif, sortFile, sortFilesBatch, cleanPath } from '../services/fileService.js'
 import { getPosterPath } from '../services/posterService.js'
+import { getSystemStats } from '../services/systemStatsService.js'
 import mime from 'mime-types'
 import duplicatesRouter from './duplicates.js'
 import facesRouter from './faces.js'
@@ -14,10 +15,33 @@ router.get('/health', (_req, res) => {
   res.json({ ok: true, message: 'HebPhotoSort API is up' })
 })
 
+router.get('/system-stats', async (_req, res) => {
+  try {
+    const stats = await getSystemStats()
+    res.json(stats)
+  } catch (err) {
+    logger.error('[ROUTE /api/system-stats] failed', {
+      error: err?.message,
+      stack: err?.stack,
+    })
+    res.status(500).json({ error: err.message })
+  }
+})
+
 router.post('/scan', async (req, res) => {
   try {
     const { sourcePath } = req.body || {}
-    if (!sourcePath) return res.status(400).json({ error: 'sourcePath is required' })
+    if (!sourcePath) {
+      return res.status(400).json({ error: 'sourcePath is required' })
+    }
+    
+    // Validate that sourcePath is not just a folder name
+    if (!path.isAbsolute(sourcePath) && !sourcePath.includes(path.sep) && !sourcePath.includes('/') && !sourcePath.includes('\\')) {
+      return res.status(400).json({ 
+        error: `נתיב לא תקין: "${sourcePath}"\nאנא הזן נתיב מלא (לדוגמה: C:\\Photos\\למיון - Copy - Copy)` 
+      })
+    }
+    
     const result = await scanFolder(sourcePath)
     res.json(result)
   } catch (err) {

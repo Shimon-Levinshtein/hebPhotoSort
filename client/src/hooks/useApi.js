@@ -31,6 +31,24 @@ const useApi = () => {
     }
   }
 
+  const getRequest = async (path) => {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const data = await res.json()
+      if (!res.ok || data?.error) {
+        const msg = data?.error || res.statusText
+        throw new Error(msg)
+      }
+      return data
+    } catch (err) {
+      console.error('[useApi] getRequest failed', { path, error: err })
+      throw err
+    }
+  }
+
   const scanFolder = (sourcePath) => request('/api/scan', { sourcePath })
   const sortByDate = (payload) => request('/api/sort', payload)
   const sortByDateBatch = (payload) => request('/api/sort-batch', payload)
@@ -39,6 +57,7 @@ const useApi = () => {
   const readExif = (targetPath) => request('/api/exif', { targetPath })
   const findDuplicates = (sourcePath) => request('/api/duplicates', { sourcePath })
   const findFaces = (sourcePath) => request('/api/faces/scan', { sourcePath })
+  const getSystemStats = () => getRequest('/api/system-stats')
 
   return {
     scanFolder,
@@ -49,6 +68,7 @@ const useApi = () => {
     readExif,
     findDuplicates,
     findFaces,
+    getSystemStats,
     loading,
     error,
   }

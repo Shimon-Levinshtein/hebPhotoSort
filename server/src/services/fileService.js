@@ -204,11 +204,32 @@ const ensureUniquePath = async (targetPath) => {
 const cleanPath = (p) => {
   if (!p) return ''
   const trimmed = p.trim().replace(/^"(.*)"$/, '$1')
+  // If it's already an absolute path (starts with drive letter on Windows or / on Unix), use it as is
+  // Otherwise, resolve it relative to current working directory
+  if (path.isAbsolute(trimmed)) {
+    return trimmed
+  }
   return path.resolve(trimmed)
 }
 
 const scanFolder = async (sourcePath) => {
+  if (!sourcePath || !sourcePath.trim()) {
+    throw new Error('sourcePath is required and cannot be empty')
+  }
+  
   const root = cleanPath(sourcePath)
+  
+  // Check if path exists before trying to access it
+  if (!fssync.existsSync(root)) {
+    throw new Error(`הנתיב לא נמצא: ${root}\nאנא ודא שהנתיב תקין וקיים.`)
+  }
+  
+  // Check if it's a directory
+  const stat = await fs.stat(root)
+  if (!stat.isDirectory()) {
+    throw new Error(`הנתיב אינו תיקייה: ${root}`)
+  }
+  
   await fs.access(root, fssync.constants.R_OK)
 
   const results = []
