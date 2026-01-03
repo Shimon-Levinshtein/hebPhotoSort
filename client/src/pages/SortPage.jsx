@@ -549,7 +549,7 @@ const SortPage = () => {
       />
 
       {/* System Performance Monitor - shown during sorting */}
-      {isSorting && <PerformanceMonitor enabled={isSorting} interval={1000} />}
+      {isSorting && <PerformanceMonitor enabled={isSorting} />}
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-200">
         {statusText}

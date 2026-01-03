@@ -3,6 +3,8 @@ import { io } from 'socket.io-client'
 import FolderPicker from '@/components/FolderPicker'
 import LazyImage from '@/components/LazyImage'
 import LightboxModal from '@/components/LightboxModal'
+import PerformanceMonitor from '@/components/PerformanceMonitor'
+import useApi from '@/hooks/useApi'
 import { useAppStore } from '@/store/appStore'
 import { useToastStore } from '@/store/toastStore'
 
@@ -25,6 +27,7 @@ const FaceSearchPage = () => {
   } = useAppStore()
   const getStore = useAppStore.getState
   const { addToast } = useToastStore()
+  const { getSystemStats } = useApi()
 
   const [filter, setFilter] = useState('')
   const [lightboxSrc, setLightboxSrc] = useState(null)
@@ -143,6 +146,35 @@ const FaceSearchPage = () => {
         return
       }
       
+      // Calculate optimal concurrency based on system capabilities (max 20 for face search)
+      let initialConcurrency = 5
+      try {
+        setFaceSearchProgress({ phase: 'init', message: 'בודק ביצועי מערכת...' })
+        const initialStats = await getSystemStats()
+        const cpuCores = initialStats.cpu?.cores || 4
+        const totalMemoryGB = parseFloat(initialStats.memory?.totalGB || 8)
+        
+        // Calculate base concurrency based on CPU cores (up to 90% utilization)
+        const baseConcurrency = Math.max(5, Math.min(20, Math.floor(cpuCores * 5 * 0.9)))
+        
+        // Calculate memory-based concurrency (assuming ~0.5GB per operation, up to 90% of available)
+        const memoryBasedConcurrency = Math.max(5, Math.min(20, Math.floor(totalMemoryGB * 0.9 / 0.5)))
+        
+        // Use the maximum of both, but cap at 20 for face search
+        initialConcurrency = Math.min(20, Math.max(5, Math.max(baseConcurrency, memoryBasedConcurrency)))
+        
+        console.log('[FaceSearchPage] Calculated concurrency:', initialConcurrency, {
+          cpuCores,
+          totalMemoryGB,
+          baseConcurrency,
+          memoryBasedConcurrency
+        })
+      } catch (err) {
+        console.error('[FaceSearchPage] Error getting initial system stats:', err)
+        // Use default if stats fetch fails
+        initialConcurrency = 5
+      }
+      
       setFaceSearchProgress({ phase: 'init', message: 'יוצר חיבור Socket.IO...' })
       
       const socket = io(apiBase, {
@@ -177,10 +209,10 @@ const FaceSearchPage = () => {
         clearTimeout(connectionTimeout)
         console.log('[FaceSearchPage] Socket.IO connected')
         setFaceSearchProgress({ phase: 'init', message: 'מתחיל סריקה...' })
-        // Start the scan
+        // Start the scan with calculated concurrency
         socket.emit('face-scan:start', {
           sourcePath: pathToScan,
-          concurrency: faceSearchConcurrency
+          concurrency: initialConcurrency
         })
       })
       
@@ -303,7 +335,7 @@ const FaceSearchPage = () => {
         }
       })
     })
-  }, [sourcePath, setSourcePath, addToast, faceSearchFaces.length, faceSearchConcurrency, setFaceSearchFaces, setFaceSearchSelectedId, setFaceSearchLoading, setFaceSearchError, setFaceSearchProgress, getStore])
+  }, [sourcePath, setSourcePath, addToast, faceSearchFaces.length, getSystemStats, setFaceSearchFaces, setFaceSearchSelectedId, setFaceSearchLoading, setFaceSearchError, setFaceSearchProgress, getStore])
 
   const handlePickSource = async () => {
     // העדפה: דיאלוג של Electron אם זמין
@@ -394,19 +426,6 @@ const FaceSearchPage = () => {
               disabled={faceSearchLoading || !faceSearchFaces.length}
             />
           </div>
-          <div className="flex items-center gap-2 text-sm text-slate-200">
-            <span>במקביל:</span>
-            <input
-              type="range"
-              min="1"
-              max="100"
-              value={faceSearchConcurrency}
-              onChange={(e) => setFaceSearchConcurrency(Number(e.target.value))}
-              className="h-2 w-24 cursor-pointer appearance-none rounded-lg bg-slate-800 accent-sky-500"
-              disabled={faceSearchLoading}
-            />
-            <span className="w-6 text-center font-mono text-sky-400">{faceSearchConcurrency}</span>
-          </div>
         </div>
         
         {/* Progress indicator */}
@@ -451,13 +470,13 @@ const FaceSearchPage = () => {
                   <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-500"></span>
                   <span>מעבד כעת {faceSearchProgress.activeCount} קבצים במקביל:</span>
                 </div>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 xl:grid-cols-12">
                   {faceSearchProgress.activeFiles.map((file) => {
                     const elapsedSec = Math.round((now - file.startTime) / 1000)
                     return (
                       <div 
                         key={file.filename}
-                        className="group relative overflow-hidden rounded-lg border border-slate-700/50 bg-slate-950/50"
+                        className="group relative overflow-hidden rounded border border-slate-700/50 bg-slate-950/50"
                       >
                         {/* Image Preview */}
                         <div className="relative aspect-square overflow-hidden bg-slate-800">
@@ -470,15 +489,15 @@ const FaceSearchPage = () => {
                           />
                           {/* Processing overlay */}
                           <div className="absolute inset-0 flex items-center justify-center bg-slate-900/40">
-                            <div className="h-8 w-8 animate-spin rounded-full border-2 border-sky-400 border-t-transparent"></div>
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-sky-400 border-t-transparent"></div>
                           </div>
                         </div>
-                        {/* File info */}
-                        <div className="p-2">
-                          <p className="truncate text-xs text-slate-300" title={file.path}>
+                        {/* File info - smaller text */}
+                        <div className="p-1">
+                          <p className="truncate text-[10px] text-slate-300" title={file.path}>
                             {file.filename}
                           </p>
-                          <span className={`text-xs font-mono ${
+                          <span className={`text-[10px] font-mono ${
                             elapsedSec >= 10 ? 'text-amber-400' : 
                             elapsedSec >= 5 ? 'text-yellow-400' : 
                             'text-slate-500'
@@ -499,6 +518,9 @@ const FaceSearchPage = () => {
           </div>
         )}
       </div>
+
+      {/* System Performance Monitor - shown during face scanning */}
+      {faceSearchLoading && <PerformanceMonitor enabled={faceSearchLoading} />}
 
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">

@@ -1,50 +1,65 @@
 import { useEffect, useState, useRef } from 'react'
-import useApi from '@/hooks/useApi'
+import { io } from 'socket.io-client'
 
 const MAX_DATA_POINTS = 60 // 60 seconds of data (1 point per second)
+const API_BASE = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || 'http://localhost:4000'
 
-const PerformanceMonitor = ({ enabled = true, interval = 1000 }) => {
-  const { getSystemStats } = useApi()
+const PerformanceMonitor = ({ enabled = true }) => {
   const [stats, setStats] = useState(null)
   const [history, setHistory] = useState({
     cpu: [],
     memory: [],
     disk: [],
   })
-  const intervalRef = useRef(null)
+  const socketRef = useRef(null)
 
   useEffect(() => {
     if (!enabled) return
 
-    const fetchStats = async () => {
-      try {
-        const data = await getSystemStats()
-        setStats(data)
+    // Connect to Socket.IO
+    const socket = io(API_BASE, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5,
+    })
 
-        // Update history
-        setHistory((prev) => {
-          const newCpu = [...prev.cpu, data.cpu.usage].slice(-MAX_DATA_POINTS)
-          const newMemory = [...prev.memory, data.memory.percent].slice(-MAX_DATA_POINTS)
-          const newDisk = [...prev.disk, data.disk?.percent || 0].slice(-MAX_DATA_POINTS)
-          return { cpu: newCpu, memory: newMemory, disk: newDisk }
-        })
-      } catch (err) {
-        console.error('[PerformanceMonitor] Failed to fetch stats', err)
-      }
-    }
+    socketRef.current = socket
 
-    // Initial fetch
-    fetchStats()
+    socket.on('connect', () => {
+      console.log('[PerformanceMonitor] Socket.IO connected')
+      // Subscribe to system stats updates
+      socket.emit('system-stats:subscribe')
+    })
 
-    // Set up polling
-    intervalRef.current = setInterval(fetchStats, interval)
+    socket.on('system-stats:update', (data) => {
+      setStats(data)
+
+      // Update history
+      setHistory((prev) => {
+        const newCpu = [...prev.cpu, data.cpu.usage].slice(-MAX_DATA_POINTS)
+        const newMemory = [...prev.memory, data.memory.percent].slice(-MAX_DATA_POINTS)
+        const newDisk = [...prev.disk, data.disk?.percent || 0].slice(-MAX_DATA_POINTS)
+        return { cpu: newCpu, memory: newMemory, disk: newDisk }
+      })
+    })
+
+    socket.on('disconnect', () => {
+      console.log('[PerformanceMonitor] Socket.IO disconnected')
+    })
+
+    socket.on('connect_error', (err) => {
+      console.error('[PerformanceMonitor] Socket.IO connection error:', err)
+    })
 
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
+      if (socketRef.current) {
+        socketRef.current.emit('system-stats:unsubscribe')
+        socketRef.current.disconnect()
+        socketRef.current = null
       }
     }
-  }, [enabled, interval, getSystemStats])
+  }, [enabled])
 
   if (!enabled || !stats) return null
 

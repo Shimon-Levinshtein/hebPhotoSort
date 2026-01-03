@@ -5,6 +5,7 @@ import { Server } from 'socket.io'
 import router from './routes/index.js'
 import { setupFaceScanSocket } from './routes/faces.js'
 import { setupSortSocket } from './routes/index.js'
+import { setupSystemStatsSocket } from './routes/systemStats.js'
 import logger from './utils/logger.js'
 
 const app = express()
@@ -64,6 +65,7 @@ process.on('uncaughtException', (err) => {
 // Setup Socket.IO handlers
 setupFaceScanSocket(io)
 setupSortSocket(io)
+setupSystemStatsSocket(io)
 
 httpServer.listen(PORT, () => {
   logger.log(`HebPhotoSort API running on http://localhost:${PORT}`)
