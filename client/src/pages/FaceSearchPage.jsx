@@ -6,45 +6,64 @@ import { useAppStore } from '@/store/appStore'
 import { useToastStore } from '@/store/toastStore'
 
 const FaceSearchPage = () => {
-  const { sourcePath, setSourcePath } = useAppStore()
+  const {
+    sourcePath,
+    setSourcePath,
+    faceSearchFaces,
+    faceSearchSelectedId,
+    faceSearchLoading,
+    faceSearchError,
+    faceSearchProgress,
+    faceSearchConcurrency,
+    setFaceSearchFaces,
+    setFaceSearchSelectedId,
+    setFaceSearchLoading,
+    setFaceSearchError,
+    setFaceSearchProgress,
+    setFaceSearchConcurrency,
+  } = useAppStore()
+  const getStore = useAppStore.getState
   const { addToast } = useToastStore()
 
-  const [faces, setFaces] = useState([])
-  const [selectedId, setSelectedId] = useState(null)
   const [filter, setFilter] = useState('')
   const [lightboxSrc, setLightboxSrc] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  
-  // Progress state
-  const [progress, setProgress] = useState(null)
   const eventSourceRef = useRef(null)
-  
-  // Concurrency setting (how many files to process in parallel)
-  const [concurrency, setConcurrency] = useState(10)
   
   // Current time for elapsed calculation (updates every second when loading)
   const [now, setNow] = useState(Date.now())
   
   useEffect(() => {
-    if (!loading || !progress?.activeFiles?.length) return
+    if (!faceSearchLoading || !faceSearchProgress?.activeFiles?.length) return
     
     const interval = setInterval(() => {
       setNow(Date.now())
     }, 1000)
     
     return () => clearInterval(interval)
-  }, [loading, progress?.activeFiles?.length])
+  }, [faceSearchLoading, faceSearchProgress?.activeFiles?.length])
+
+  // Cleanup EventSource when component unmounts (e.g., navigating away)
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close()
+        eventSourceRef.current = null
+        // Reset loading state when unmounting (but keep the data in store)
+        setFaceSearchLoading(false)
+        setFaceSearchProgress(null)
+      }
+    }
+  }, [setFaceSearchLoading, setFaceSearchProgress])
 
   const filteredFaces = useMemo(() => {
     const term = filter.trim().toLowerCase()
-    if (!term) return faces
-    return faces.filter((f) => f.label.toLowerCase().includes(term))
-  }, [faces, filter])
+    if (!term) return faceSearchFaces
+    return faceSearchFaces.filter((f) => f.label.toLowerCase().includes(term))
+  }, [faceSearchFaces, filter])
 
   const selectedFace = useMemo(
-    () => faces.find((f) => f.id === selectedId) || null,
-    [faces, selectedId],
+    () => faceSearchFaces.find((f) => f.id === faceSearchSelectedId) || null,
+    [faceSearchFaces, faceSearchSelectedId],
   )
 
   const isAbsolutePath = (p) => {
@@ -59,15 +78,15 @@ const FaceSearchPage = () => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
       eventSourceRef.current = null
-      setLoading(false)
-      setProgress(null)
+      setFaceSearchLoading(false)
+      setFaceSearchProgress(null)
       addToast({ 
         title: 'סריקה נעצרה', 
         description: 'ניתן להמשיך מאותה נקודה בהפעלה הבאה',
         variant: 'default' 
       })
     }
-  }, [addToast])
+  }, [addToast, setFaceSearchLoading, setFaceSearchProgress])
 
   const handleScan = useCallback(async (pathOverride) => {
     const pathToScan = (pathOverride ?? sourcePath ?? '').trim()
@@ -85,9 +104,9 @@ const FaceSearchPage = () => {
     }
     
     setSourcePath(pathToScan)
-    setLoading(true)
-    setError(null)
-    setProgress({ phase: 'init', message: 'מתחבר...' })
+    setFaceSearchLoading(true)
+    setFaceSearchError(null)
+    setFaceSearchProgress({ phase: 'init', message: 'מתחבר...' })
     
     // Close any existing connection
     if (eventSourceRef.current) {
@@ -96,7 +115,7 @@ const FaceSearchPage = () => {
     
     return new Promise((resolve) => {
       const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000'
-      const url = `${apiBase}/api/faces/scan-stream?sourcePath=${encodeURIComponent(pathToScan)}&concurrency=${concurrency}`
+      const url = `${apiBase}/api/faces/scan-stream?sourcePath=${encodeURIComponent(pathToScan)}&concurrency=${faceSearchConcurrency}`
       
       const eventSource = new EventSource(url)
       eventSourceRef.current = eventSource
@@ -104,7 +123,7 @@ const FaceSearchPage = () => {
       eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
-          setProgress(data)
+          setFaceSearchProgress(data)
         } catch (e) {
           console.error('[FaceSearchPage] Failed to parse progress:', e)
         }
@@ -115,9 +134,12 @@ const FaceSearchPage = () => {
         try {
           const { faces: newFaces } = JSON.parse(event.data)
           if (newFaces && newFaces.length > 0) {
-            setFaces(newFaces)
+            setFaceSearchFaces(newFaces)
             // Auto-select first face if none selected
-            setSelectedId((prev) => prev || newFaces[0]?.id)
+            const currentId = getStore().faceSearchSelectedId
+            if (!currentId) {
+              setFaceSearchSelectedId(newFaces[0]?.id)
+            }
           }
         } catch (e) {
           console.error('[FaceSearchPage] Failed to parse faces:', e)
@@ -128,8 +150,11 @@ const FaceSearchPage = () => {
         try {
           const res = JSON.parse(event.data)
           const nextFaces = res.faces || []
-          setFaces(nextFaces)
-          setSelectedId((prev) => prev || nextFaces[0]?.id)
+          setFaceSearchFaces(nextFaces)
+          const currentId = getStore().faceSearchSelectedId
+          if (!currentId && nextFaces.length > 0) {
+            setFaceSearchSelectedId(nextFaces[0]?.id)
+          }
           
           if (!nextFaces.length) {
             addToast({ title: 'לא נמצאו פנים', description: 'לא נמצאו קבצי מדיה זמינים', variant: 'error' })
@@ -153,20 +178,20 @@ const FaceSearchPage = () => {
         try {
           if (event.data) {
             const data = JSON.parse(event.data)
-            setError(data.error || 'שגיאה לא ידועה')
+            setFaceSearchError(data.error || 'שגיאה לא ידועה')
             addToast({ title: 'שגיאת סריקה', description: data.error, variant: 'error' })
           }
         } catch (e) {
           console.error('[FaceSearchPage] SSE error:', e)
-          setError('שגיאת חיבור')
+          setFaceSearchError('שגיאת חיבור')
         }
       })
       
       eventSource.addEventListener('close', () => {
         eventSource.close()
         eventSourceRef.current = null
-        setLoading(false)
-        setProgress(null)
+        setFaceSearchLoading(false)
+        setFaceSearchProgress(null)
         resolve()
       })
       
@@ -174,18 +199,18 @@ const FaceSearchPage = () => {
         console.error('[FaceSearchPage] EventSource error:', err)
         eventSource.close()
         eventSourceRef.current = null
-        setLoading(false)
-        setProgress(null)
+        setFaceSearchLoading(false)
+        setFaceSearchProgress(null)
         
         // Only show error if we haven't received results yet
-        if (!faces.length) {
-          setError('שגיאת חיבור לשרת')
+        if (!faceSearchFaces.length) {
+          setFaceSearchError('שגיאת חיבור לשרת')
           addToast({ title: 'שגיאת חיבור', description: 'לא ניתן להתחבר לשרת', variant: 'error' })
         }
         resolve()
       }
     })
-  }, [sourcePath, setSourcePath, addToast, faces.length, concurrency])
+  }, [sourcePath, setSourcePath, addToast, faceSearchFaces.length, faceSearchConcurrency, setFaceSearchFaces, setFaceSearchSelectedId, setFaceSearchLoading, setFaceSearchError, setFaceSearchProgress, getStore])
 
   const handlePickSource = async () => {
     // העדפה: דיאלוג של Electron אם זמין
@@ -228,9 +253,9 @@ const FaceSearchPage = () => {
         </p>
       </header>
 
-      {error && (
+      {faceSearchError && (
         <div className="rounded-lg border border-rose-700 bg-rose-900/40 px-4 py-3 text-sm text-rose-100">
-          ⚠️ {error}
+          ⚠️ {faceSearchError}
         </div>
       )}
 
@@ -239,12 +264,12 @@ const FaceSearchPage = () => {
         value={sourcePath}
         onSelect={handlePickSource}
         onChange={setSourcePath}
-        disabled={loading}
+        disabled={faceSearchLoading}
       />
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
         <div className="flex flex-wrap items-center gap-3">
-          {loading ? (
+          {faceSearchLoading ? (
             <button
               type="button"
               className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-500"
@@ -259,11 +284,11 @@ const FaceSearchPage = () => {
               onClick={() => handleScan()}
               disabled={!sourcePath}
             >
-              {faces.length > 0 ? 'סרוק שוב (ימשיך מהנקודה שעצר)' : 'סרוק פנים'}
+              {faceSearchFaces.length > 0 ? 'סרוק שוב (ימשיך מהנקודה שעצר)' : 'סרוק פנים'}
             </button>
           )}
           <div className="text-sm text-slate-300">
-            {faces.length ? `${faces.length} קבוצות · ${selectedFace?.count || 0} תמונות לקבוצה הנבחרת` : 'טרם נסרק'}
+            {faceSearchFaces.length ? `${faceSearchFaces.length} קבוצות · ${selectedFace?.count || 0} תמונות לקבוצה הנבחרת` : 'טרם נסרק'}
           </div>
           <div className="flex items-center gap-2 text-sm text-slate-200">
             <span>חיפוש:</span>
@@ -273,7 +298,7 @@ const FaceSearchPage = () => {
               onChange={(e) => setFilter(e.target.value)}
               placeholder="סינון לפי שם קבוצה"
               className="rounded-lg border border-slate-800 bg-slate-950/70 px-2 py-1 text-sm text-slate-100 outline-none ring-0 focus:border-sky-500"
-              disabled={loading || !faces.length}
+              disabled={faceSearchLoading || !faceSearchFaces.length}
             />
           </div>
           <div className="flex items-center gap-2 text-sm text-slate-200">
@@ -281,60 +306,60 @@ const FaceSearchPage = () => {
             <input
               type="range"
               min="1"
-              max="20"
-              value={concurrency}
-              onChange={(e) => setConcurrency(Number(e.target.value))}
+              max="100"
+              value={faceSearchConcurrency}
+              onChange={(e) => setFaceSearchConcurrency(Number(e.target.value))}
               className="h-2 w-24 cursor-pointer appearance-none rounded-lg bg-slate-800 accent-sky-500"
-              disabled={loading}
+              disabled={faceSearchLoading}
             />
-            <span className="w-6 text-center font-mono text-sky-400">{concurrency}</span>
+            <span className="w-6 text-center font-mono text-sky-400">{faceSearchConcurrency}</span>
           </div>
         </div>
         
         {/* Progress indicator */}
-        {loading && progress && (
+        {faceSearchLoading && faceSearchProgress && (
           <div className="mt-4 space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-slate-300">{progress.message || 'מעבד...'}</span>
-              {progress.current !== undefined && progress.total !== undefined && (
+              <span className="text-slate-300">{faceSearchProgress.message || 'מעבד...'}</span>
+              {faceSearchProgress.current !== undefined && faceSearchProgress.total !== undefined && (
                 <span className="text-slate-400">
-                  {progress.current} / {progress.total} קבצים
-                  {progress.facesFound > 0 && ` · ${progress.facesFound} קבוצות פנים`}
+                  {faceSearchProgress.current} / {faceSearchProgress.total} קבצים
+                  {faceSearchProgress.facesFound > 0 && ` · ${faceSearchProgress.facesFound} קבוצות פנים`}
                 </span>
               )}
             </div>
             {/* Cache status badges */}
-            {(progress.cached > 0 || progress.toScan > 0) && (
+            {(faceSearchProgress.cached > 0 || faceSearchProgress.toScan > 0) && (
               <div className="flex flex-wrap gap-2 text-xs">
-                {progress.cached > 0 && (
+                {faceSearchProgress.cached > 0 && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-900/50 px-2 py-0.5 text-emerald-300">
-                    ⚡ {progress.cached} מהמטמון (כבר נסרקו)
+                    ⚡ {faceSearchProgress.cached} מהמטמון (כבר נסרקו)
                   </span>
                 )}
-                {progress.toScan > 0 && (
+                {faceSearchProgress.toScan > 0 && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-amber-900/50 px-2 py-0.5 text-amber-300">
-                    🔍 {progress.scanned || 0}/{progress.toScan} חדשים
+                    🔍 {faceSearchProgress.scanned || 0}/{faceSearchProgress.toScan} חדשים
                   </span>
                 )}
               </div>
             )}
-            {progress.total > 0 && (
+            {faceSearchProgress.total > 0 && (
               <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
                 <div
                   className="h-full rounded-full bg-sky-500 transition-[width] duration-300"
-                  style={{ width: `${Math.min(100, Math.round((progress.current / progress.total) * 100))}%` }}
+                  style={{ width: `${Math.min(100, Math.round((faceSearchProgress.current / faceSearchProgress.total) * 100))}%` }}
                 />
               </div>
             )}
             {/* Active files being processed in parallel */}
-            {progress.activeFiles && progress.activeFiles.length > 0 && (
+            {faceSearchProgress.activeFiles && faceSearchProgress.activeFiles.length > 0 && (
               <div className="mt-3 space-y-2">
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-500"></span>
-                  <span>מעבד כעת {progress.activeCount} קבצים במקביל:</span>
+                  <span>מעבד כעת {faceSearchProgress.activeCount} קבצים במקביל:</span>
                 </div>
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                  {progress.activeFiles.map((file) => {
+                  {faceSearchProgress.activeFiles.map((file) => {
                     const elapsedSec = Math.round((now - file.startTime) / 1000)
                     return (
                       <div 
@@ -394,9 +419,9 @@ const FaceSearchPage = () => {
                 <button
                   key={face.id}
                   type="button"
-                  onClick={() => setSelectedId(face.id)}
+                  onClick={() => setFaceSearchSelectedId(face.id)}
                   className={`flex flex-col items-center rounded-lg border p-2 text-slate-100 transition ${
-                    face.id === selectedId
+                    face.id === faceSearchSelectedId
                       ? 'border-sky-500 bg-sky-500/10 shadow-inner'
                       : 'border-slate-800 hover:border-slate-700'
                   }`}
@@ -408,7 +433,7 @@ const FaceSearchPage = () => {
                       className="h-full w-full"
                       imgClassName="h-full w-full object-cover"
                       placeholderClassName="h-24 w-24"
-                      onClick={() => setSelectedId(face.id)}
+                      onClick={() => setFaceSearchSelectedId(face.id)}
                     />
                   </div>
                   <div className="mt-2 text-center">

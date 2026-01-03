@@ -9,6 +9,14 @@ export const useAppStore = create((set, get) => ({
   loading: false,
   error: null,
 
+  // Face search state
+  faceSearchFaces: [],
+  faceSearchSelectedId: null,
+  faceSearchLoading: false,
+  faceSearchError: null,
+  faceSearchProgress: null,
+  faceSearchConcurrency: 10,
+
   setSourcePath: (path) => set({ sourcePath: path }),
   setDestPath: (path) => set({ destPath: path }),
   setImages: (images) => set({ images, currentIndex: 0 }),
@@ -36,6 +44,22 @@ export const useAppStore = create((set, get) => ({
       sortedCount: 0,
       loading: false,
       error: null,
+    }),
+
+  // Face search actions
+  setFaceSearchFaces: (faces) => set({ faceSearchFaces: faces }),
+  setFaceSearchSelectedId: (id) => set({ faceSearchSelectedId: id }),
+  setFaceSearchLoading: (loading) => set({ faceSearchLoading: loading }),
+  setFaceSearchError: (error) => set({ faceSearchError: error }),
+  setFaceSearchProgress: (progress) => set({ faceSearchProgress: progress }),
+  setFaceSearchConcurrency: (concurrency) => set({ faceSearchConcurrency: concurrency }),
+  resetFaceSearch: () =>
+    set({
+      faceSearchFaces: [],
+      faceSearchSelectedId: null,
+      faceSearchLoading: false,
+      faceSearchError: null,
+      faceSearchProgress: null,
     }),
 }))
 
