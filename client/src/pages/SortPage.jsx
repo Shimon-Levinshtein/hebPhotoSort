@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
+import { io } from 'socket.io-client'
 import FolderPicker from '@/components/FolderPicker'
 import ImagePreview from '@/components/ImagePreview'
 import ImageGrid from '@/components/ImageGrid'
@@ -31,13 +32,15 @@ const SortPage = () => {
     incrementSorted,
   } = useAppStore()
 
-  const { scanFolder, deleteFile, sortByDate, sortByDateBatch, createFolder, loading, error } = useApi()
+  const { scanFolder, deleteFile, sortByDate, sortByDateBatch, createFolder, getSystemStats, loading, error } = useApi()
   const { addToast } = useToastStore()
   const [format, setFormat] = useState('month-year')
   const [mode, setMode] = useState('copy')
   const [lightboxSrc, setLightboxSrc] = useState(null)
   const [isSorting, setIsSorting] = useState(false)
-  const [sortProgress, setSortProgress] = useState({ current: 0, total: 0 })
+  const [sortProgress, setSortProgress] = useState({ current: 0, total: 0, active: 0 })
+  const socketRef = useRef(null)
+  const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:4000'
 
   const currentImage = images[currentIndex]
   const total = images.length
@@ -48,6 +51,16 @@ const SortPage = () => {
       setImages(fallbackImages)
     }
   }, [images.length, setImages])
+
+  // Cleanup socket on unmount
+  useEffect(() => {
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect()
+        socketRef.current = null
+      }
+    }
+  }, [])
 
   const statusText = useMemo(() => {
     if (!sourcePath || !destPath) return 'בחר תיקיות מקור ויעד כדי להתחיל'
@@ -96,7 +109,7 @@ const SortPage = () => {
     // Fallback to manual input
     const chosenRaw =
       sourcePath ||
-      window.prompt('הכנס נתיב מלא לתיקיית מקור (לדוגמה: C:\\Photos\\Unsorted)') ||
+      window.prompt('הכנס נתיב מלא לתיקיית מקור (לדוגמה: C:\\Photos\\Unsorted)', sourcePath || '') ||
       ''
     const chosen = chosenRaw.trim()
     
@@ -141,7 +154,7 @@ const SortPage = () => {
   const handleSelectDest = async () => {
     const chosenRaw =
       destPath ||
-      window.prompt('הכנס נתיב לתיקיית יעד (לדוגמה: C:\\Photos\\Sorted)') ||
+      window.prompt('הכנס נתיב לתיקיית יעד (לדוגמה: C:\\Photos\\Sorted)', destPath || '') ||
       ''
     const chosen = chosenRaw.trim()
     try {
@@ -242,105 +255,193 @@ const SortPage = () => {
     if (!destPath || !images.length) return
     const opMode = askMode()
     setIsSorting(true)
-    setSortProgress({ current: 0, total: images.length })
+    setSortProgress({ current: 0, total: images.length, active: 0 })
 
+    // Prepare file paths (remove file:// prefix)
+    const filePaths = images.map((img) => img.replace('file://', ''))
+    
+    // Initialize concurrency based on system capabilities
+    let initialConcurrency = 5
     try {
-      // Prepare file paths (remove file:// prefix)
-      const filePaths = images.map((img) => img.replace('file://', ''))
-      const batchSize = 20 // Process 20 files per batch
+      const initialStats = await getSystemStats()
+      const cpuCores = initialStats.cpu?.cores || 4
+      const totalMemoryGB = parseFloat(initialStats.memory?.totalGB || 8)
+      const baseConcurrency = Math.max(5, Math.min(50, cpuCores * 5))
+      const memoryBasedConcurrency = Math.max(5, Math.min(50, Math.floor(totalMemoryGB / 0.5)))
+      initialConcurrency = Math.min(100, Math.max(5, Math.max(baseConcurrency, memoryBasedConcurrency)))
+    } catch (err) {
+      console.error('[SortPage] Error getting initial system stats:', err)
+    }
+
+    return new Promise((resolve) => {
+      // Disconnect existing socket if any
+      if (socketRef.current) {
+        socketRef.current.disconnect()
+        socketRef.current = null
+      }
+
+      // Connect to Socket.IO
+      const socket = io(apiBase, {
+        transports: ['websocket', 'polling'],
+        reconnection: false,
+      })
+      socketRef.current = socket
+
       let totalSuccess = 0
       let totalErrors = 0
       const allErrors = []
 
-      // Process files in smaller batches for better progress reporting
-      for (let i = 0; i < filePaths.length; i += batchSize) {
-        const batch = filePaths.slice(i, i + batchSize)
-        setSortProgress({ current: i, total: filePaths.length })
-
-        try {
-          const result = await sortByDateBatch({
-            files: batch,
-            destRoot: destPath,
-            format,
-            mode: opMode,
-            concurrency: 5, // Process 5 files in parallel within each batch
+      // Connection timeout
+      const connectionTimeout = setTimeout(() => {
+        if (!socket.connected) {
+          socket.disconnect()
+          socketRef.current = null
+          setIsSorting(false)
+          addToast({
+            title: 'שגיאת חיבור',
+            description: 'לא ניתן להתחבר לשרת. ודא שהשרת רץ.',
+            variant: 'error',
           })
+          resolve()
+        }
+      }, 5000)
 
-          const successCount = result.success || 0
-          const errorCount = result.errors || 0
-          totalSuccess += successCount
-          totalErrors += errorCount
+      socket.on('connect', () => {
+        clearTimeout(connectionTimeout)
+        console.log('[SortPage] Socket.IO connected')
+        
+        // Start sorting
+        socket.emit('sort:start', {
+          files: filePaths,
+          destRoot: destPath,
+          format,
+          mode: opMode,
+          concurrency: initialConcurrency,
+        })
+      })
 
-          // Update sorted count
-          for (let j = 0; j < successCount; j++) {
-            incrementSorted()
-          }
+      // Handle progress updates
+      socket.on('sort:progress', (progress) => {
+        console.log('[SortPage] Progress update:', progress)
+        setSortProgress({
+          current: progress.current || 0,
+          total: progress.total || filePaths.length,
+          active: progress.active || progress.concurrency || 0,
+        })
+      })
 
-          // Collect errors
-          if (result.results) {
-            result.results.forEach((r) => {
-              if (!r.success && r.error) {
-                allErrors.push({ src: r.src, error: r.error })
-              }
-            })
-          }
-        } catch (err) {
-          console.error('Batch sorting failed', err)
-          totalErrors += batch.length
-          batch.forEach((src) => {
-            allErrors.push({ src, error: err.message })
+      // Handle final result
+      socket.on('sort:result', (result) => {
+        totalSuccess = result.success || 0
+        totalErrors = result.errors || 0
+        
+        // Update sorted count
+        for (let j = 0; j < totalSuccess; j++) {
+          incrementSorted()
+        }
+
+        // Collect errors
+        if (result.results) {
+          result.results.forEach((r) => {
+            if (!r.success && r.error) {
+              allErrors.push({ src: r.src, error: r.error })
+            }
           })
         }
-      }
+      })
 
-      setSortProgress({ current: filePaths.length, total: filePaths.length })
+      // Handle completion
+      socket.on('sort:done', () => {
+        socket.disconnect()
+        socketRef.current = null
+        setIsSorting(false)
+        setSortProgress({ current: filePaths.length, total: filePaths.length, active: 0 })
 
-      // Show results
-      if (totalErrors > 0) {
-        addToast({
-          title: 'מיון הושלם עם שגיאות',
-          description: `${totalSuccess} קבצים הועברו בהצלחה, ${totalErrors} שגיאות`,
-          variant: 'warning',
+        // Show results
+        if (totalErrors > 0) {
+          addToast({
+            title: 'מיון הושלם עם שגיאות',
+            description: `${totalSuccess} קבצים הועברו בהצלחה, ${totalErrors} שגיאות`,
+            variant: 'warning',
+          })
+        } else {
+          addToast({
+            title: 'מיון הסתיים',
+            description: `${totalSuccess} קבצים הועברו בהצלחה`,
+            variant: 'success',
+          })
+        }
+
+        // Show individual errors (limit to first 5)
+        allErrors.slice(0, 5).forEach((err) => {
+          const fileName = err.src.split(/[/\\]/).pop() || err.src
+          addToast({
+            title: 'שגיאה במיון',
+            description: `${fileName} - ${err.error}`,
+            variant: 'error',
+          })
         })
-      } else {
-        addToast({
-          title: 'מיון הסתיים',
-          description: `${totalSuccess} קבצים הועברו בהצלחה`,
-          variant: 'success',
-        })
-      }
 
-      // Show individual errors (limit to first 5 to avoid spam)
-      allErrors.slice(0, 5).forEach((err) => {
-        const fileName = err.src.split(/[/\\]/).pop() || err.src
+        if (allErrors.length > 5) {
+          addToast({
+            title: 'עוד שגיאות',
+            description: `ועוד ${allErrors.length - 5} שגיאות נוספות`,
+            variant: 'error',
+          })
+        }
+
+        setImages([])
+        setCurrentIndex(0)
+        resolve()
+      })
+
+      // Handle stop confirmation
+      socket.on('sort:stopped', () => {
+        socket.disconnect()
+        socketRef.current = null
+        setIsSorting(false)
+        setSortProgress({ current: 0, total: 0, active: 0 })
+        resolve()
+      })
+
+      // Handle errors
+      socket.on('sort:error', (data) => {
+        socket.disconnect()
+        socketRef.current = null
+        setIsSorting(false)
+        setSortProgress({ current: 0, total: 0, active: 0 })
         addToast({
           title: 'שגיאה במיון',
-          description: `${fileName} - ${err.error}`,
+          description: data.error || 'שגיאה לא ידועה',
           variant: 'error',
         })
+        resolve()
       })
 
-      if (allErrors.length > 5) {
+      socket.on('connect_error', (err) => {
+        clearTimeout(connectionTimeout)
+        console.error('[SortPage] Socket.IO connection error:', err)
+        socket.disconnect()
+        socketRef.current = null
+        setIsSorting(false)
+        setSortProgress({ current: 0, total: 0, active: 0 })
         addToast({
-          title: 'עוד שגיאות',
-          description: `ועוד ${allErrors.length - 5} שגיאות נוספות`,
+          title: 'שגיאת חיבור',
+          description: `לא ניתן להתחבר לשרת: ${err.message || 'שגיאה לא ידועה'}`,
           variant: 'error',
         })
-      }
-
-      setImages([])
-      setCurrentIndex(0)
-    } catch (err) {
-      addToast({
-        title: 'שגיאה במיון אוטומטי',
-        description: err.message,
-        variant: 'error',
+        resolve()
       })
-      console.error('auto-sort failed', err)
-    } finally {
-      setIsSorting(false)
-      setSortProgress({ current: 0, total: 0 })
-    }
+
+      socket.on('disconnect', (reason) => {
+        clearTimeout(connectionTimeout)
+        console.log('[SortPage] Socket.IO disconnected:', reason)
+        if (isSorting && reason !== 'io client disconnect') {
+          setIsSorting(false)
+          setSortProgress({ current: 0, total: 0, active: 0 })
+        }
+      })
+    })
   }
 
   const disableActions = loading || isSorting || !sourcePath || !destPath || !images.length
@@ -443,7 +544,8 @@ const SortPage = () => {
 
       <ProgressBar 
         current={isSorting ? sortProgress.current : sortedCount} 
-        total={isSorting ? sortProgress.total : total} 
+        total={isSorting ? sortProgress.total : total}
+        active={isSorting ? sortProgress.active : 0}
       />
 
       {/* System Performance Monitor - shown during sorting */}

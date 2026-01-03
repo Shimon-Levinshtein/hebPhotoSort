@@ -9,6 +9,110 @@ import duplicatesRouter from './duplicates.js'
 import facesRouter from './faces.js'
 import logger from '../utils/logger.js'
 
+// Socket.IO handler setup function for file sorting
+export const setupSortSocket = (io) => {
+  io.on('connection', (socket) => {
+    logger.log(`[Socket.IO] Sort client connected: ${socket.id}`)
+    
+    let currentAbortController = null
+    
+    // Handle disconnect
+    socket.on('disconnect', () => {
+      if (currentAbortController) {
+        currentAbortController.abort()
+        currentAbortController = null
+      }
+      logger.log(`[Socket.IO] Sort client disconnected: ${socket.id}`)
+    })
+    
+    // Handle stop request
+    socket.on('sort:stop', () => {
+      logger.log(`[Socket.IO] Stop requested by client: ${socket.id}`)
+      if (currentAbortController) {
+        currentAbortController.abort()
+        currentAbortController = null
+        socket.emit('sort:stopped', { message: 'Sort stopped by user' })
+      }
+    })
+    
+    // Handle sort batch start
+    socket.on('sort:start', async ({ files, destRoot, format = 'month-year', mode = 'move', concurrency = 5 }) => {
+      if (!Array.isArray(files) || !files.length) {
+        socket.emit('sort:error', { error: 'files array is required' })
+        return
+      }
+      if (!destRoot) {
+        socket.emit('sort:error', { error: 'destRoot is required' })
+        return
+      }
+      
+      // Abort any existing sort
+      if (currentAbortController) {
+        currentAbortController.abort()
+      }
+      
+      logger.log(`[Socket.IO] Starting sort: ${files.length} files, concurrency: ${concurrency}`)
+      
+      // Create AbortController
+      const abortController = new AbortController()
+      currentAbortController = abortController
+      
+      // Send progress updates via Socket.IO
+      const sendProgress = (progress) => {
+        if (!socket.connected || abortController.signal.aborted) return
+        socket.emit('sort:progress', progress)
+      }
+      
+      try {
+        const result = await sortFilesBatch({
+          files,
+          destRoot,
+          format,
+          mode,
+          concurrency,
+          getSystemStats,
+          onProgress: sendProgress
+        })
+        
+        // Clear the abort controller if this sort completed
+        if (currentAbortController === abortController) {
+          currentAbortController = null
+        }
+        
+        if (!socket.connected || abortController.signal.aborted) {
+          logger.log('[Socket.IO] Sort completed/cancelled but client already disconnected or aborted')
+          return
+        }
+        
+        // Send final result
+        socket.emit('sort:result', result)
+        socket.emit('sort:done', { message: 'Sort completed' })
+      } catch (err) {
+        // Clear the abort controller
+        if (currentAbortController === abortController) {
+          currentAbortController = null
+        }
+        
+        // Don't emit error if it was just an abort
+        if (err.name === 'AbortError' || abortController.signal.aborted) {
+          logger.log('[Socket.IO] Sort aborted')
+          return
+        }
+        
+        logger.error('[Socket.IO] Sort failed', {
+          error: err?.message,
+          stack: err?.stack,
+        })
+        
+        if (!socket.connected) return
+        
+        // Send error via Socket.IO
+        socket.emit('sort:error', { error: err.message })
+      }
+    })
+  })
+}
+
 const router = Router()
 
 router.get('/health', (_req, res) => {
@@ -127,8 +231,29 @@ router.post('/sort-batch', async (req, res) => {
       return res.status(400).json({ error: 'files array is required' })
     }
     if (!destRoot) return res.status(400).json({ error: 'destRoot is required' })
-    const result = await sortFilesBatch({ files, destRoot, format, mode, concurrency })
-    res.json(result)
+
+    // Track progress
+    let lastProgress = { current: 0, total: files.length, active: 0, concurrency: concurrency }
+    const onProgress = (progress) => {
+      lastProgress = progress
+    }
+
+    const result = await sortFilesBatch({ 
+      files, 
+      destRoot, 
+      format, 
+      mode, 
+      concurrency,
+      getSystemStats,
+      onProgress
+    })
+    
+    // Include final progress and concurrency in response
+    res.json({ 
+      ...result, 
+      progress: lastProgress,
+      concurrency: result.finalConcurrency || lastProgress.concurrency || concurrency
+    })
   } catch (err) {
     logger.error('[ROUTE /api/sort-batch] failed', {
       body: req.body,

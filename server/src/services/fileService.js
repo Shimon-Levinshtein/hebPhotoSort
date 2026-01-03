@@ -295,16 +295,72 @@ const sortFile = async ({ src, destRoot, format = 'month-year', mode = 'move' })
 }
 
 /**
- * Sort multiple files in parallel for better performance
+ * Calculate optimal concurrency based on system stats
+ * Takes into account CPU cores, memory, and current usage to maximize performance up to 90%
+ * @param {Object} stats - System statistics
+ * @param {number} currentConcurrency - Current concurrency level
+ * @param {number} minConcurrency - Minimum concurrency (default: 1)
+ * @param {number} maxConcurrency - Maximum concurrency (default: 100)
+ * @returns {number} Optimal concurrency level
+ */
+const calculateOptimalConcurrency = (stats, currentConcurrency = 5, minConcurrency = 1, maxConcurrency = 100) => {
+  if (!stats) return currentConcurrency
+
+  const cpuUsage = stats.cpu?.usage || 0
+  const memoryUsage = stats.memory?.percent || 0
+  const diskUsage = stats.disk?.percent || stats.disk?.usage || 0
+  const cpuCores = stats.cpu?.cores || 4
+  const totalMemoryGB = parseFloat(stats.memory?.totalGB || 8)
+
+  // Calculate base concurrency based on system resources
+  // Use CPU cores as base (more cores = more parallel operations possible)
+  // Also consider available memory (each operation might use some memory)
+  const baseConcurrency = Math.max(5, Math.min(50, cpuCores * 5))
+  const memoryBasedConcurrency = Math.max(5, Math.min(50, Math.floor(totalMemoryGB / 0.5))) // ~0.5GB per operation
+  const systemMaxConcurrency = Math.min(maxConcurrency, Math.max(baseConcurrency, memoryBasedConcurrency))
+
+  // If any resource is above 90%, reduce concurrency significantly
+  if (cpuUsage > 90 || memoryUsage > 90 || diskUsage > 90) {
+    return Math.max(minConcurrency, Math.floor(currentConcurrency * 0.6))
+  }
+
+  // If any resource is above 80%, reduce concurrency moderately
+  if (cpuUsage > 80 || memoryUsage > 80 || diskUsage > 80) {
+    return Math.max(minConcurrency, Math.floor(currentConcurrency * 0.8))
+  }
+
+  // If all resources are below 70%, we can increase concurrency
+  // But don't exceed system capabilities
+  if (cpuUsage < 70 && memoryUsage < 70 && diskUsage < 70) {
+    const increased = Math.floor(currentConcurrency * 1.2)
+    return Math.min(systemMaxConcurrency, increased)
+  }
+
+  // If resources are between 70-80%, keep current concurrency
+  return Math.min(systemMaxConcurrency, currentConcurrency)
+}
+
+/**
+ * Sort multiple files in parallel for better performance with dynamic concurrency
  * @param {Object} params - Sorting parameters
  * @param {string[]} params.files - Array of file paths to sort
  * @param {string} params.destRoot - Destination root directory
  * @param {string} params.format - Date format ('month-year' or 'day-month-year')
  * @param {string} params.mode - Operation mode ('copy' or 'move')
- * @param {number} params.concurrency - Number of files to process in parallel (default: 5)
+ * @param {number} params.concurrency - Initial number of files to process in parallel (default: 5)
+ * @param {Function} params.getSystemStats - Function to get system stats for dynamic adjustment
+ * @param {Function} params.onProgress - Callback for progress updates (current, total, active)
  * @returns {Promise<Object>} Results with success/error for each file
  */
-const sortFilesBatch = async ({ files, destRoot, format = 'month-year', mode = 'move', concurrency = 5 }) => {
+const sortFilesBatch = async ({ 
+  files, 
+  destRoot, 
+  format = 'month-year', 
+  mode = 'move', 
+  concurrency = 5,
+  getSystemStats = null,
+  onProgress = null
+}) => {
   if (!Array.isArray(files) || !files.length) {
     return { results: [], total: 0, success: 0, errors: 0 }
   }
@@ -312,11 +368,54 @@ const sortFilesBatch = async ({ files, destRoot, format = 'month-year', mode = '
   const results = []
   const errors = []
   let processed = 0
+  let currentConcurrency = concurrency
+  const activeOperations = new Map() // Track active file operations
+  let lastReportedConcurrency = concurrency // Track last reported concurrency
 
-  // Process files in batches to avoid overwhelming the system
-  for (let i = 0; i < files.length; i += concurrency) {
-    const batch = files.slice(i, i + concurrency)
-    const batchPromises = batch.map(async (src) => {
+  // Process files in batches with dynamic concurrency adjustment
+  let fileIndex = 0
+
+  while (fileIndex < files.length) {
+    // Check system stats and adjust concurrency before each batch (but not too frequently)
+    if (getSystemStats && (processed === 0 || processed % 3 === 0)) {
+      try {
+        const stats = await getSystemStats()
+        const newConcurrency = calculateOptimalConcurrency(stats, currentConcurrency, 1, 100)
+        if (newConcurrency !== currentConcurrency) {
+          currentConcurrency = Math.max(1, Math.min(100, newConcurrency))
+          lastReportedConcurrency = currentConcurrency
+        }
+      } catch (statsErr) {
+        // Ignore stats errors, continue with current concurrency
+        console.error('[sortFilesBatch] Error getting system stats:', statsErr.message)
+      }
+    }
+
+    // Get next batch based on current concurrency
+    const batch = []
+    while (batch.length < currentConcurrency && fileIndex < files.length) {
+      batch.push(files[fileIndex++])
+    }
+
+    // Track active operations - add files to tracking as they start
+    const batchFileIds = batch.map((src) => {
+      const fileId = `${src}-${Date.now()}-${Math.random()}`
+      activeOperations.set(fileId, { src, startTime: Date.now() })
+      return { src, fileId }
+    })
+
+    // Report progress before processing batch (include current concurrency)
+    if (onProgress) {
+      onProgress({
+        current: processed,
+        total: files.length,
+        active: activeOperations.size,
+        concurrency: currentConcurrency
+      })
+    }
+
+    // Process batch in parallel
+    const batchPromises = batchFileIds.map(async ({ src, fileId }) => {
       try {
         const result = await sortFile({ src, destRoot, format, mode })
         processed++
@@ -325,6 +424,19 @@ const sortFilesBatch = async ({ files, destRoot, format = 'month-year', mode = '
         processed++
         errors.push({ src, error: err.message })
         return { src, success: false, error: err.message }
+      } finally {
+        // Remove from active operations when done
+        activeOperations.delete(fileId)
+        
+        // Report progress after each file completes (include current concurrency)
+        if (onProgress) {
+          onProgress({
+            current: processed,
+            total: files.length,
+            active: activeOperations.size,
+            concurrency: currentConcurrency
+          })
+        }
       }
     })
 
@@ -337,6 +449,7 @@ const sortFilesBatch = async ({ files, destRoot, format = 'month-year', mode = '
     total: files.length,
     success: results.filter((r) => r.success).length,
     errors: errors.length,
+    finalConcurrency: lastReportedConcurrency, // Return final concurrency used
   }
 }
 
