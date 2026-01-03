@@ -29,7 +29,9 @@ const getMediaDate = async (filePath) => {
     }
   }
   const stat = await fs.stat(filePath)
-  return stat.birthtime || stat.mtime
+  // Prefer mtime over birthtime because birthtime can be the copy/move date, not the original file date
+  // mtime (modification date) usually reflects the actual file date better
+  return stat.mtime || stat.birthtime
 }
 
 const HEB_MONTHS = {
