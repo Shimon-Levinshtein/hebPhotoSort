@@ -43,12 +43,15 @@ const toHebrewDate = (date) => {
   const gregorianYear = date.getFullYear() // השנה הלועזית
   const gregorianMonth = date.getMonth() + 1 // החודש הלועזי (1-12)
   const gregorianMonthStr = String(gregorianMonth).padStart(2, '0') // 02, 03, וכו'
+  const gregorianDay = date.getDate() // היום הלועזי (1-31)
+  const gregorianDayStr = String(gregorianDay).padStart(2, '0') // 01, 02, וכו'
   return {
     full: hebrew,
     year,
     yearPath,
     gregorianYear,
     gregorianMonth,
+    gregorianDay,
     month,
     day,
     dayGematriya: dayGematriyaPath,
@@ -62,7 +65,10 @@ const buildTargetPath = (destRoot, gregorianYear, hebrew, format) => {
   const base = path.join(yearDir, hebrew.folderName)
   if (format === 'day-month-year') {
     const dayGematriya = hebrew.dayGematriya || String(hebrew.day)
-    const dayName = typeof hebrew.day === 'number' ? `יום ${dayGematriya} (${hebrew.day})` : hebrew.day
+    const gregorianDayStr = String(hebrew.gregorianDay || hebrew.day).padStart(2, '0')
+    const gregorianMonthStr = String(hebrew.gregorianMonth).padStart(2, '0')
+    const gregorianDateStr = `${gregorianDayStr}-${gregorianMonthStr}-${hebrew.gregorianYear}`
+    const dayName = typeof hebrew.day === 'number' ? `יום ${dayGematriya} (${gregorianDateStr})` : hebrew.day
     return path.join(base, dayName)
   }
   return base
