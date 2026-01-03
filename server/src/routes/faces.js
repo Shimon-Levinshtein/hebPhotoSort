@@ -9,6 +9,9 @@ export const setupFaceScanSocket = (io) => {
   io.on('connection', (socket) => {
     logger.log(`[Socket.IO] Face scan client connected: ${socket.id}`)
     
+    // Log connection details
+    logger.log(`[Socket.IO] Client transport: ${socket.conn.transport.name}`)
+    
     let currentAbortController = null
     
     // Handle disconnect - abort any ongoing scan

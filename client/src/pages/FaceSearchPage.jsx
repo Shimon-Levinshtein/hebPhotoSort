@@ -113,18 +113,68 @@ const FaceSearchPage = () => {
     // Close any existing connection
     if (socketRef.current) {
       socketRef.current.disconnect()
+      socketRef.current = null
     }
     
-    return new Promise((resolve) => {
-      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000'
+    return new Promise(async (resolve) => {
+      const apiBase = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || 'http://localhost:4000'
+      
+      // First, check if server is reachable
+      try {
+        setFaceSearchProgress({ phase: 'init', message: 'בודק חיבור לשרת...' })
+        const healthCheck = await fetch(`${apiBase}/api/health`, { 
+          method: 'GET',
+          signal: AbortSignal.timeout(5000) // 5 second timeout for health check
+        })
+        if (!healthCheck.ok) {
+          throw new Error('Server health check failed')
+        }
+      } catch (err) {
+        console.error('[FaceSearchPage] Server health check failed:', err)
+        setFaceSearchLoading(false)
+        setFaceSearchProgress(null)
+        setFaceSearchError('לא ניתן להתחבר לשרת')
+        addToast({ 
+          title: 'שגיאת חיבור', 
+          description: `השרת לא זמין ב-${apiBase}. ודא שהשרת רץ.`, 
+          variant: 'error' 
+        })
+        resolve()
+        return
+      }
+      
+      setFaceSearchProgress({ phase: 'init', message: 'יוצר חיבור Socket.IO...' })
       
       const socket = io(apiBase, {
-        transports: ['websocket', 'polling']
+        transports: ['websocket', 'polling'],
+        timeout: 20000, // 20 seconds timeout
+        reconnection: false, // Disable auto-reconnection, we'll handle it manually
+        forceNew: true,
+        autoConnect: true
       })
       socketRef.current = socket
       
+      // Add timeout handler - if connection doesn't establish within timeout
+      const connectionTimeout = setTimeout(() => {
+        if (!socket.connected) {
+          console.error('[FaceSearchPage] Socket.IO connection timeout')
+          socket.disconnect()
+          socketRef.current = null
+          setFaceSearchLoading(false)
+          setFaceSearchProgress(null)
+          setFaceSearchError('תם הזמן המתנה לחיבור לשרת')
+          addToast({ 
+            title: 'שגיאת חיבור', 
+            description: `לא ניתן להתחבר לשרת בזמן סביר. ודא שהשרת רץ על ${apiBase}`, 
+            variant: 'error' 
+          })
+          resolve()
+        }
+      }, 20000) // 20 seconds
+      
       // Handle connection
       socket.on('connect', () => {
+        clearTimeout(connectionTimeout)
         console.log('[FaceSearchPage] Socket.IO connected')
         setFaceSearchProgress({ phase: 'init', message: 'מתחיל סריקה...' })
         // Start the scan
@@ -224,6 +274,7 @@ const FaceSearchPage = () => {
       
       socket.on('connect_error', (err) => {
         console.error('[FaceSearchPage] Socket.IO connection error:', err)
+        const errorMessage = err.message || 'שגיאת חיבור לשרת'
         socket.disconnect()
         socketRef.current = null
         setFaceSearchLoading(false)
@@ -231,14 +282,25 @@ const FaceSearchPage = () => {
         
         // Only show error if we haven't received results yet
         if (!faceSearchFaces.length) {
-          setFaceSearchError('שגיאת חיבור לשרת')
-          addToast({ title: 'שגיאת חיבור', description: 'לא ניתן להתחבר לשרת', variant: 'error' })
+          setFaceSearchError(errorMessage)
+          addToast({ 
+            title: 'שגיאת חיבור', 
+            description: `לא ניתן להתחבר לשרת: ${errorMessage}. ודא שהשרת רץ על ${apiBase}`, 
+            variant: 'error' 
+          })
         }
         resolve()
       })
       
-      socket.on('disconnect', () => {
-        console.log('[FaceSearchPage] Socket.IO disconnected')
+      socket.on('disconnect', (reason) => {
+        clearTimeout(connectionTimeout)
+        console.log('[FaceSearchPage] Socket.IO disconnected:', reason)
+        // If disconnected unexpectedly during scan, show error
+        if (faceSearchLoading && reason !== 'io client disconnect') {
+          setFaceSearchError('החיבור נותק מהשרת')
+          setFaceSearchLoading(false)
+          setFaceSearchProgress(null)
+        }
       })
     })
   }, [sourcePath, setSourcePath, addToast, faceSearchFaces.length, faceSearchConcurrency, setFaceSearchFaces, setFaceSearchSelectedId, setFaceSearchLoading, setFaceSearchError, setFaceSearchProgress, getStore])
