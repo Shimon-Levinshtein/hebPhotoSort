@@ -4,6 +4,113 @@ import logger from '../utils/logger.js'
 
 const facesRouter = Router()
 
+// Socket.IO handler setup function
+export const setupFaceScanSocket = (io) => {
+  io.on('connection', (socket) => {
+    logger.log(`[Socket.IO] Face scan client connected: ${socket.id}`)
+    
+    let currentAbortController = null
+    
+    // Handle disconnect - abort any ongoing scan
+    socket.on('disconnect', () => {
+      if (currentAbortController) {
+        currentAbortController.abort()
+        currentAbortController = null
+      }
+      logger.log(`[Socket.IO] Client disconnected: ${socket.id}`)
+    })
+    
+    // Handle stop request
+    socket.on('face-scan:stop', () => {
+      logger.log(`[Socket.IO] Stop requested by client: ${socket.id}`)
+      if (currentAbortController) {
+        currentAbortController.abort()
+        currentAbortController = null
+        socket.emit('face-scan:stopped', { message: 'Scan stopped by user' })
+      }
+    })
+    
+    // Handle face scan start
+    socket.on('face-scan:start', async ({ sourcePath, concurrency }) => {
+      const concurrencyNum = Math.min(100, Math.max(1, parseInt(concurrency, 10) || 10))
+      
+      if (!sourcePath) {
+        socket.emit('face-scan:error', { error: 'sourcePath is required' })
+        return
+      }
+      
+      // Abort any existing scan
+      if (currentAbortController) {
+        currentAbortController.abort()
+      }
+      
+      logger.log(`[Socket.IO] Starting face scan: ${sourcePath}, concurrency: ${concurrencyNum}`)
+      
+      // Create AbortController to signal cancellation to the scan service
+      const abortController = new AbortController()
+      currentAbortController = abortController
+      
+      // Send progress updates via Socket.IO
+      // If faces are included, send them as a separate 'faces' event for incremental display
+      const sendProgress = (data) => {
+        if (!socket.connected || abortController.signal.aborted) return
+        
+        // Send progress data (without faces to keep it light)
+        const { faces, ...progressData } = data
+        socket.emit('face-scan:progress', progressData)
+        
+        // If faces are included, send them as incremental update
+        if (faces && faces.length > 0) {
+          socket.emit('face-scan:faces', { faces, total: data.total, current: data.current })
+        }
+      }
+      
+      try {
+        const result = await scanFaces(sourcePath, sendProgress, { 
+          concurrency: concurrencyNum,
+          signal: abortController.signal 
+        })
+        
+        // Clear the abort controller if this scan completed
+        if (currentAbortController === abortController) {
+          currentAbortController = null
+        }
+        
+        if (!socket.connected || abortController.signal.aborted) {
+          logger.log('[Socket.IO] Scan completed/cancelled but client already disconnected or aborted')
+          return
+        }
+        
+        // Send final result (even if cancelled, send what we have)
+        socket.emit('face-scan:result', result)
+        socket.emit('face-scan:done', { message: 'Scan completed' })
+      } catch (err) {
+        // Clear the abort controller
+        if (currentAbortController === abortController) {
+          currentAbortController = null
+        }
+        
+        // Don't emit error if it was just an abort
+        if (err.name === 'AbortError' || abortController.signal.aborted) {
+          logger.log('[Socket.IO] Scan aborted')
+          return
+        }
+        
+        logger.error('[Socket.IO] Face scan failed', {
+          sourcePath,
+          error: err?.message,
+          stack: err?.stack,
+        })
+        
+        if (!socket.connected) return
+        
+        // Send error via Socket.IO
+        socket.emit('face-scan:error', { error: err.message, code: err.code })
+      }
+    })
+  })
+}
+
 // Regular POST endpoint (for backwards compatibility)
 facesRouter.post('/scan', async (req, res) => {
   try {

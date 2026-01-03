@@ -1,4 +1,5 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
+import { io } from 'socket.io-client'
 import FolderPicker from '@/components/FolderPicker'
 import LazyImage from '@/components/LazyImage'
 import LightboxModal from '@/components/LightboxModal'
@@ -27,7 +28,7 @@ const FaceSearchPage = () => {
 
   const [filter, setFilter] = useState('')
   const [lightboxSrc, setLightboxSrc] = useState(null)
-  const eventSourceRef = useRef(null)
+  const socketRef = useRef(null)
   
   // Current time for elapsed calculation (updates every second when loading)
   const [now, setNow] = useState(Date.now())
@@ -42,12 +43,12 @@ const FaceSearchPage = () => {
     return () => clearInterval(interval)
   }, [faceSearchLoading, faceSearchProgress?.activeFiles?.length])
 
-  // Cleanup EventSource when component unmounts (e.g., navigating away)
+  // Cleanup Socket.IO when component unmounts (e.g., navigating away)
   useEffect(() => {
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close()
-        eventSourceRef.current = null
+      if (socketRef.current) {
+        socketRef.current.disconnect()
+        socketRef.current = null
         // Reset loading state when unmounting (but keep the data in store)
         setFaceSearchLoading(false)
         setFaceSearchProgress(null)
@@ -75,9 +76,10 @@ const FaceSearchPage = () => {
 
   // Stop the current scan
   const handleStop = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-      eventSourceRef.current = null
+    if (socketRef.current) {
+      socketRef.current.emit('face-scan:stop')
+      socketRef.current.disconnect()
+      socketRef.current = null
       setFaceSearchLoading(false)
       setFaceSearchProgress(null)
       addToast({ 
@@ -109,30 +111,42 @@ const FaceSearchPage = () => {
     setFaceSearchProgress({ phase: 'init', message: 'מתחבר...' })
     
     // Close any existing connection
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
+    if (socketRef.current) {
+      socketRef.current.disconnect()
     }
     
     return new Promise((resolve) => {
       const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000'
-      const url = `${apiBase}/api/faces/scan-stream?sourcePath=${encodeURIComponent(pathToScan)}&concurrency=${faceSearchConcurrency}`
       
-      const eventSource = new EventSource(url)
-      eventSourceRef.current = eventSource
+      const socket = io(apiBase, {
+        transports: ['websocket', 'polling']
+      })
+      socketRef.current = socket
       
-      eventSource.onmessage = (event) => {
+      // Handle connection
+      socket.on('connect', () => {
+        console.log('[FaceSearchPage] Socket.IO connected')
+        setFaceSearchProgress({ phase: 'init', message: 'מתחיל סריקה...' })
+        // Start the scan
+        socket.emit('face-scan:start', {
+          sourcePath: pathToScan,
+          concurrency: faceSearchConcurrency
+        })
+      })
+      
+      // Handle progress updates
+      socket.on('face-scan:progress', (data) => {
         try {
-          const data = JSON.parse(event.data)
           setFaceSearchProgress(data)
         } catch (e) {
           console.error('[FaceSearchPage] Failed to parse progress:', e)
         }
-      }
+      })
       
       // Handle incremental face updates - display faces as they are found
-      eventSource.addEventListener('faces', (event) => {
+      socket.on('face-scan:faces', (event) => {
         try {
-          const { faces: newFaces } = JSON.parse(event.data)
+          const { faces: newFaces } = event
           if (newFaces && newFaces.length > 0) {
             setFaceSearchFaces(newFaces)
             // Auto-select first face if none selected
@@ -146,9 +160,9 @@ const FaceSearchPage = () => {
         }
       })
       
-      eventSource.addEventListener('result', (event) => {
+      // Handle final result
+      socket.on('face-scan:result', (res) => {
         try {
-          const res = JSON.parse(event.data)
           const nextFaces = res.faces || []
           setFaceSearchFaces(nextFaces)
           const currentId = getStore().faceSearchSelectedId
@@ -174,31 +188,44 @@ const FaceSearchPage = () => {
         }
       })
       
-      eventSource.addEventListener('error', (event) => {
-        try {
-          if (event.data) {
-            const data = JSON.parse(event.data)
-            setFaceSearchError(data.error || 'שגיאה לא ידועה')
-            addToast({ title: 'שגיאת סריקה', description: data.error, variant: 'error' })
-          }
-        } catch (e) {
-          console.error('[FaceSearchPage] SSE error:', e)
-          setFaceSearchError('שגיאת חיבור')
-        }
-      })
-      
-      eventSource.addEventListener('close', () => {
-        eventSource.close()
-        eventSourceRef.current = null
+      // Handle scan completion
+      socket.on('face-scan:done', () => {
+        socket.disconnect()
+        socketRef.current = null
         setFaceSearchLoading(false)
         setFaceSearchProgress(null)
         resolve()
       })
       
-      eventSource.onerror = (err) => {
-        console.error('[FaceSearchPage] EventSource error:', err)
-        eventSource.close()
-        eventSourceRef.current = null
+      // Handle stop confirmation
+      socket.on('face-scan:stopped', () => {
+        socket.disconnect()
+        socketRef.current = null
+        setFaceSearchLoading(false)
+        setFaceSearchProgress(null)
+        resolve()
+      })
+      
+      // Handle errors
+      socket.on('face-scan:error', (data) => {
+        try {
+          setFaceSearchError(data.error || 'שגיאה לא ידועה')
+          addToast({ title: 'שגיאת סריקה', description: data.error, variant: 'error' })
+          socket.disconnect()
+          socketRef.current = null
+          setFaceSearchLoading(false)
+          setFaceSearchProgress(null)
+          resolve()
+        } catch (e) {
+          console.error('[FaceSearchPage] Socket.IO error:', e)
+          setFaceSearchError('שגיאת חיבור')
+        }
+      })
+      
+      socket.on('connect_error', (err) => {
+        console.error('[FaceSearchPage] Socket.IO connection error:', err)
+        socket.disconnect()
+        socketRef.current = null
         setFaceSearchLoading(false)
         setFaceSearchProgress(null)
         
@@ -208,7 +235,11 @@ const FaceSearchPage = () => {
           addToast({ title: 'שגיאת חיבור', description: 'לא ניתן להתחבר לשרת', variant: 'error' })
         }
         resolve()
-      }
+      })
+      
+      socket.on('disconnect', () => {
+        console.log('[FaceSearchPage] Socket.IO disconnected')
+      })
     })
   }, [sourcePath, setSourcePath, addToast, faceSearchFaces.length, faceSearchConcurrency, setFaceSearchFaces, setFaceSearchSelectedId, setFaceSearchLoading, setFaceSearchError, setFaceSearchProgress, getStore])
 

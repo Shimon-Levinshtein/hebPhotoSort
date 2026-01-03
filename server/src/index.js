@@ -1,9 +1,20 @@
 import express from 'express'
 import cors from 'cors'
+import { createServer } from 'http'
+import { Server } from 'socket.io'
 import router from './routes/index.js'
+import { setupFaceScanSocket } from './routes/faces.js'
 import logger from './utils/logger.js'
 
 const app = express()
+const httpServer = createServer(app)
+const io = new Server(httpServer, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+})
+
 const PORT = process.env.PORT || 4000
 
 app.use(cors())
@@ -46,8 +57,12 @@ process.on('uncaughtException', (err) => {
   logger.error('[UNCAUGHT EXCEPTION]', err)
 })
 
-app.listen(PORT, () => {
+// Setup Socket.IO handlers
+setupFaceScanSocket(io)
+
+httpServer.listen(PORT, () => {
   logger.log(`HebPhotoSort API running on http://localhost:${PORT}`)
+  logger.log(`Socket.IO server ready`)
 })
 
 
