@@ -2,7 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs/promises'
 import fssync from 'node:fs'
 import exif from 'exif-parser'
-import { HDate } from '@hebcal/core'
+import { HDate, HebrewCalendar } from '@hebcal/core'
 
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'])
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'])
@@ -48,6 +48,73 @@ const HEB_MONTHS = {
   13: 'אדר ב׳',
 }
 
+// מפת חגים עיקריים - שמות בעברית
+const HOLIDAY_NAMES = {
+  'Pesach': 'פסח',
+  'Shavuot': 'שבועות',
+  'Rosh Hashana': 'ראש השנה',
+  'Yom Kippur': 'יום כיפור',
+  'Sukkot': 'סוכות',
+  'Shmini Atzeret': 'שמיני עצרת',
+  'Simchat Torah': 'שמחת תורה',
+  'Chanukah': 'חנוכה',
+  'Purim': 'פורים',
+  'Lag BaOmer': 'ל״ג בעומר',
+  'Tu B\'Av': 'ט״ו באב',
+  'Tu Bishvat': 'ט״ו בשבט',
+  'Tisha B\'Av': 'תשעה באב',
+  'Yom HaAtzmaut': 'יום העצמאות',
+  'Yom HaZikaron': 'יום הזיכרון',
+  'Yom HaShoah': 'יום השואה',
+}
+
+/**
+ * מקבל את שם החג עבור תאריך עברי נתון
+ * @param {Date} date - תאריך לועזי
+ * @returns {string|null} שם החג בעברית או null אם אין חג
+ */
+const getHolidayName = (date) => {
+  try {
+    const hd = new HDate(date)
+    const year = hd.getFullYear()
+    
+    // מקבל את כל החגים לשנה העברית
+    const holidays = HebrewCalendar.getHolidaysForYear(year)
+    
+    // מחפש חגים בתאריך הספציפי
+    for (const event of holidays) {
+      const eventDate = event.getDate()
+      // בדיקה אם התאריך תואם
+      if (eventDate.getAbs() === hd.getAbs()) {
+        const eventId = event.getDesc()
+        // בדיקה לפי ID במיפוי
+        if (HOLIDAY_NAMES[eventId]) {
+          return HOLIDAY_NAMES[eventId]
+        }
+        
+        // בדיקה לפי שם האירוע בעברית
+        const eventName = event.render('he')
+        if (eventName) {
+          // בדיקה אם זה חג (לא שבת או ראש חודש)
+          if (eventId && !eventId.includes('Shabbat') && !eventId.includes('Rosh Chodesh')) {
+            // אם יש במיפוי, נחזיר את השם מהמיפוי
+            if (HOLIDAY_NAMES[eventName]) {
+              return HOLIDAY_NAMES[eventName]
+            }
+            // אחרת נחזיר את השם בעברית
+            return eventName
+          }
+        }
+      }
+    }
+    
+    return null
+  } catch (err) {
+    console.error('[fileService] Error getting holiday name', { date, error: err.message })
+    return null
+  }
+}
+
 const toHebrewDate = (date) => {
   const hd = new HDate(date)
   const full = hd.renderGematriya() // למשל: כ״ד ניסן תשפ״ה
@@ -64,6 +131,7 @@ const toHebrewDate = (date) => {
   const gregorianMonthStr = String(gregorianMonth).padStart(2, '0') // 02, 03, וכו'
   const gregorianDay = date.getDate() // היום הלועזי (1-31)
   const gregorianDayStr = String(gregorianDay).padStart(2, '0') // 01, 02, וכו'
+  const holidayName = getHolidayName(date)
   return {
     full,
     year: yearRaw,
@@ -75,12 +143,20 @@ const toHebrewDate = (date) => {
     day,
     dayGematriya: dayGematriyaPath,
     folderName: `${month}- ${yearPath} - (${gregorianMonthStr}-${gregorianYear})`,
+    holidayName,
   }
 }
 
 const buildTargetPath = (destRoot, hebrew, format) => {
   const yearDirName = `${hebrew.yearPath} - (${hebrew.gregorianYear})`
   const yearDir = path.join(destRoot, yearDirName)
+  
+  // אם יש חג ופורמט הוא month-year, יוצרים תיקיית חג בין החודשים
+  if (format === 'month-year' && hebrew.holidayName) {
+    const holidayDir = path.join(yearDir, hebrew.holidayName)
+    return holidayDir
+  }
+  
   const base = path.join(yearDir, hebrew.folderName)
   if (format === 'day-month-year') {
     const dayGematriya = hebrew.dayGematriya || String(hebrew.day)
