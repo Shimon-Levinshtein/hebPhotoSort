@@ -31,24 +31,38 @@ const getImageDate = async (filePath) => {
 const toHebrewDate = (date) => {
   const hd = new HDate(date)
   const hebrew = hd.renderGematriya() // e.g., כ״ד כסלו תשפ״ה
+  const parts = hebrew.split(' ')
   const month = hd.getMonthName()
   const year = hd.getFullYear()
+  const yearRaw = parts[parts.length - 1] || year // תשפ״ה (עם גרשיים)
+  const yearPath = String(yearRaw).replace(/[״"]/g, "''") // נתיב בטוח: תשפ''ה
   const day = hd.getDate()
+  const dayGematriya = parts[0] || String(day) // כ״ד - היום בגימטריה
   const sanitize = (str) => str.replace(/["״']/g, '')
+  const dayGematriyaPath = dayGematriya.replace(/[״"]/g, "''") // נתיב בטוח: כ''ד
+  const gregorianYear = date.getFullYear() // השנה הלועזית
+  const gregorianMonth = date.getMonth() + 1 // החודש הלועזי (1-12)
+  const gregorianMonthStr = String(gregorianMonth).padStart(2, '0') // 02, 03, וכו'
   return {
     full: hebrew,
     year,
+    yearPath,
+    gregorianYear,
+    gregorianMonth,
     month,
     day,
-    folderName: `${sanitize(month)} ${sanitize(String(year))}`,
+    dayGematriya: dayGematriyaPath,
+    folderName: `${sanitize(month)}- ${yearPath} - (${gregorianMonthStr}-${gregorianYear})`,
   }
 }
 
 const buildTargetPath = (destRoot, gregorianYear, hebrew, format) => {
-  const yearDir = path.join(destRoot, String(gregorianYear))
+  const yearDirName = `${hebrew.yearPath} - (${hebrew.gregorianYear})`
+  const yearDir = path.join(destRoot, yearDirName)
   const base = path.join(yearDir, hebrew.folderName)
   if (format === 'day-month-year') {
-    const dayName = typeof hebrew.day === 'number' ? `יום ${hebrew.day}` : hebrew.day
+    const dayGematriya = hebrew.dayGematriya || String(hebrew.day)
+    const dayName = typeof hebrew.day === 'number' ? `יום ${dayGematriya} (${hebrew.day})` : hebrew.day
     return path.join(base, dayName)
   }
   return base
