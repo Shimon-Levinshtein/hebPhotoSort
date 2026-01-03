@@ -33,6 +33,7 @@ const useApi = () => {
 
   const scanFolder = (sourcePath) => request('/api/scan', { sourcePath })
   const sortByDate = (payload) => request('/api/sort', payload)
+  const sortByDateBatch = (payload) => request('/api/sort-batch', payload)
   const deleteFile = (targetPath) => request('/api/delete', { targetPath })
   const createFolder = (targetPath) => request('/api/create-folder', { targetPath })
   const readExif = (targetPath) => request('/api/exif', { targetPath })
@@ -42,6 +43,7 @@ const useApi = () => {
   return {
     scanFolder,
     sortByDate,
+    sortByDateBatch,
     deleteFile,
     createFolder,
     readExif,

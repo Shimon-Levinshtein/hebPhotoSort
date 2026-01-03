@@ -40,28 +40,46 @@ const getHolidayName = (date) => {
     
     // מחפש חגים בתאריך הספציפי
     for (const event of holidays) {
-      const eventDate = event.getDate()
-      // בדיקה אם התאריך תואם
-      if (eventDate.getAbs() === hd.getAbs()) {
-        const eventId = event.getDesc()
-        // בדיקה לפי ID במיפוי
-        if (HOLIDAY_NAMES[eventId]) {
-          return HOLIDAY_NAMES[eventId]
+      try {
+        // Get the Hebrew date from the event - try different methods
+        let eventDate = null
+        if (typeof event.getDate === 'function') {
+          eventDate = event.getDate()
+        } else if (event.hdate) {
+          eventDate = event.hdate
+        } else if (event.date) {
+          // If it's a Date object, convert to HDate
+          eventDate = new HDate(event.date)
+        } else {
+          // Skip events without a valid date
+          continue
         }
-        
-        // בדיקה לפי שם האירוע בעברית
-        const eventName = event.render('he')
-        if (eventName) {
-          // בדיקה אם זה חג (לא שבת או ראש חודש)
-          if (eventId && !eventId.includes('Shabbat') && !eventId.includes('Rosh Chodesh')) {
-            // אם יש במיפוי, נחזיר את השם מהמיפוי
-            if (HOLIDAY_NAMES[eventName]) {
-              return HOLIDAY_NAMES[eventName]
+
+        // בדיקה אם התאריך תואם
+        if (eventDate && eventDate.getAbs && eventDate.getAbs() === hd.getAbs()) {
+          const eventId = event.getDesc ? event.getDesc() : null
+          // בדיקה לפי ID במיפוי
+          if (eventId && HOLIDAY_NAMES[eventId]) {
+            return HOLIDAY_NAMES[eventId]
+          }
+          
+          // בדיקה לפי שם האירוע בעברית
+          const eventName = event.render ? event.render('he') : null
+          if (eventName) {
+            // בדיקה אם זה חג (לא שבת או ראש חודש)
+            if (eventId && !eventId.includes('Shabbat') && !eventId.includes('Rosh Chodesh')) {
+              // אם יש במיפוי, נחזיר את השם מהמיפוי
+              if (HOLIDAY_NAMES[eventName]) {
+                return HOLIDAY_NAMES[eventName]
+              }
+              // אחרת נחזיר את השם בעברית
+              return eventName
             }
-            // אחרת נחזיר את השם בעברית
-            return eventName
           }
         }
+      } catch (eventErr) {
+        // Skip this event if there's an error processing it
+        continue
       }
     }
     

@@ -85,28 +85,46 @@ const getHolidayName = (date) => {
     
     // מחפש חגים בתאריך הספציפי
     for (const event of holidays) {
-      const eventDate = event.getDate()
-      // בדיקה אם התאריך תואם
-      if (eventDate.getAbs() === hd.getAbs()) {
-        const eventId = event.getDesc()
-        // בדיקה לפי ID במיפוי
-        if (HOLIDAY_NAMES[eventId]) {
-          return HOLIDAY_NAMES[eventId]
+      try {
+        // Get the Hebrew date from the event - try different methods
+        let eventDate = null
+        if (typeof event.getDate === 'function') {
+          eventDate = event.getDate()
+        } else if (event.hdate) {
+          eventDate = event.hdate
+        } else if (event.date) {
+          // If it's a Date object, convert to HDate
+          eventDate = new HDate(event.date)
+        } else {
+          // Skip events without a valid date
+          continue
         }
-        
-        // בדיקה לפי שם האירוע בעברית
-        const eventName = event.render('he')
-        if (eventName) {
-          // בדיקה אם זה חג (לא שבת או ראש חודש)
-          if (eventId && !eventId.includes('Shabbat') && !eventId.includes('Rosh Chodesh')) {
-            // אם יש במיפוי, נחזיר את השם מהמיפוי
-            if (HOLIDAY_NAMES[eventName]) {
-              return HOLIDAY_NAMES[eventName]
+
+        // בדיקה אם התאריך תואם
+        if (eventDate && eventDate.getAbs && eventDate.getAbs() === hd.getAbs()) {
+          const eventId = event.getDesc ? event.getDesc() : null
+          // בדיקה לפי ID במיפוי
+          if (eventId && HOLIDAY_NAMES[eventId]) {
+            return HOLIDAY_NAMES[eventId]
+          }
+          
+          // בדיקה לפי שם האירוע בעברית
+          const eventName = event.render ? event.render('he') : null
+          if (eventName) {
+            // בדיקה אם זה חג (לא שבת או ראש חודש)
+            if (eventId && !eventId.includes('Shabbat') && !eventId.includes('Rosh Chodesh')) {
+              // אם יש במיפוי, נחזיר את השם מהמיפוי
+              if (HOLIDAY_NAMES[eventName]) {
+                return HOLIDAY_NAMES[eventName]
+              }
+              // אחרת נחזיר את השם בעברית
+              return eventName
             }
-            // אחרת נחזיר את השם בעברית
-            return eventName
           }
         }
+      } catch (eventErr) {
+        // Skip this event if there's an error processing it
+        continue
       }
     }
     
@@ -255,6 +273,52 @@ const sortFile = async ({ src, destRoot, format = 'month-year', mode = 'move' })
   }
 }
 
+/**
+ * Sort multiple files in parallel for better performance
+ * @param {Object} params - Sorting parameters
+ * @param {string[]} params.files - Array of file paths to sort
+ * @param {string} params.destRoot - Destination root directory
+ * @param {string} params.format - Date format ('month-year' or 'day-month-year')
+ * @param {string} params.mode - Operation mode ('copy' or 'move')
+ * @param {number} params.concurrency - Number of files to process in parallel (default: 5)
+ * @returns {Promise<Object>} Results with success/error for each file
+ */
+const sortFilesBatch = async ({ files, destRoot, format = 'month-year', mode = 'move', concurrency = 5 }) => {
+  if (!Array.isArray(files) || !files.length) {
+    return { results: [], total: 0, success: 0, errors: 0 }
+  }
+
+  const results = []
+  const errors = []
+  let processed = 0
+
+  // Process files in batches to avoid overwhelming the system
+  for (let i = 0; i < files.length; i += concurrency) {
+    const batch = files.slice(i, i + concurrency)
+    const batchPromises = batch.map(async (src) => {
+      try {
+        const result = await sortFile({ src, destRoot, format, mode })
+        processed++
+        return { src, success: true, ...result }
+      } catch (err) {
+        processed++
+        errors.push({ src, error: err.message })
+        return { src, success: false, error: err.message }
+      }
+    })
+
+    const batchResults = await Promise.all(batchPromises)
+    results.push(...batchResults)
+  }
+
+  return {
+    results,
+    total: files.length,
+    success: results.filter((r) => r.success).length,
+    errors: errors.length,
+  }
+}
+
 export {
   cleanPath,
   scanFolder,
@@ -262,6 +326,7 @@ export {
   createFolder,
   readExif,
   sortFile,
+  sortFilesBatch,
   isImage,
   isVideo,
   isMedia,

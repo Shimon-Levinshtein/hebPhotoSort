@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import fssync from 'node:fs'
 import path from 'node:path'
-import { scanFolder, deleteFile, createFolder, readExif, sortFile, cleanPath } from '../services/fileService.js'
+import { scanFolder, deleteFile, createFolder, readExif, sortFile, sortFilesBatch, cleanPath } from '../services/fileService.js'
 import { getPosterPath } from '../services/posterService.js'
 import mime from 'mime-types'
 import duplicatesRouter from './duplicates.js'
@@ -88,6 +88,25 @@ router.post('/sort', async (req, res) => {
     res.json(result)
   } catch (err) {
     logger.error('[ROUTE /api/sort] failed', {
+      body: req.body,
+      error: err?.message,
+      stack: err?.stack,
+    })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/sort-batch', async (req, res) => {
+  try {
+    const { files, destRoot, format = 'month-year', mode = 'move', concurrency = 5 } = req.body || {}
+    if (!Array.isArray(files) || !files.length) {
+      return res.status(400).json({ error: 'files array is required' })
+    }
+    if (!destRoot) return res.status(400).json({ error: 'destRoot is required' })
+    const result = await sortFilesBatch({ files, destRoot, format, mode, concurrency })
+    res.json(result)
+  } catch (err) {
+    logger.error('[ROUTE /api/sort-batch] failed', {
       body: req.body,
       error: err?.message,
       stack: err?.stack,

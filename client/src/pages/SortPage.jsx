@@ -30,11 +30,13 @@ const SortPage = () => {
     incrementSorted,
   } = useAppStore()
 
-  const { scanFolder, deleteFile, sortByDate, createFolder, loading, error } = useApi()
+  const { scanFolder, deleteFile, sortByDate, sortByDateBatch, createFolder, loading, error } = useApi()
   const { addToast } = useToastStore()
   const [format, setFormat] = useState('month-year')
   const [mode, setMode] = useState('copy')
   const [lightboxSrc, setLightboxSrc] = useState(null)
+  const [isSorting, setIsSorting] = useState(false)
+  const [sortProgress, setSortProgress] = useState({ current: 0, total: 0 })
 
   const currentImage = images[currentIndex]
   const total = images.length
@@ -191,30 +193,109 @@ const SortPage = () => {
   const handleAutoSortAll = async () => {
     if (!destPath || !images.length) return
     const opMode = askMode()
-    for (const img of images) {
-      try {
-        await sortByDate({
-          src: img.replace('file://', ''),
-          destRoot: destPath,
-          format,
-          mode: opMode,
-        })
-        incrementSorted()
-      } catch (err) {
+    setIsSorting(true)
+    setSortProgress({ current: 0, total: images.length })
+
+    try {
+      // Prepare file paths (remove file:// prefix)
+      const filePaths = images.map((img) => img.replace('file://', ''))
+      const batchSize = 20 // Process 20 files per batch
+      let totalSuccess = 0
+      let totalErrors = 0
+      const allErrors = []
+
+      // Process files in smaller batches for better progress reporting
+      for (let i = 0; i < filePaths.length; i += batchSize) {
+        const batch = filePaths.slice(i, i + batchSize)
+        setSortProgress({ current: i, total: filePaths.length })
+
+        try {
+          const result = await sortByDateBatch({
+            files: batch,
+            destRoot: destPath,
+            format,
+            mode: opMode,
+            concurrency: 5, // Process 5 files in parallel within each batch
+          })
+
+          const successCount = result.success || 0
+          const errorCount = result.errors || 0
+          totalSuccess += successCount
+          totalErrors += errorCount
+
+          // Update sorted count
+          for (let j = 0; j < successCount; j++) {
+            incrementSorted()
+          }
+
+          // Collect errors
+          if (result.results) {
+            result.results.forEach((r) => {
+              if (!r.success && r.error) {
+                allErrors.push({ src: r.src, error: r.error })
+              }
+            })
+          }
+        } catch (err) {
+          console.error('Batch sorting failed', err)
+          totalErrors += batch.length
+          batch.forEach((src) => {
+            allErrors.push({ src, error: err.message })
+          })
+        }
+      }
+
+      setSortProgress({ current: filePaths.length, total: filePaths.length })
+
+      // Show results
+      if (totalErrors > 0) {
         addToast({
-          title: 'שגיאה במיון אוטומטי',
-          description: `${img} - ${err.message}`,
+          title: 'מיון הושלם עם שגיאות',
+          description: `${totalSuccess} קבצים הועברו בהצלחה, ${totalErrors} שגיאות`,
+          variant: 'warning',
+        })
+      } else {
+        addToast({
+          title: 'מיון הסתיים',
+          description: `${totalSuccess} קבצים הועברו בהצלחה`,
+          variant: 'success',
+        })
+      }
+
+      // Show individual errors (limit to first 5 to avoid spam)
+      allErrors.slice(0, 5).forEach((err) => {
+        const fileName = err.src.split(/[/\\]/).pop() || err.src
+        addToast({
+          title: 'שגיאה במיון',
+          description: `${fileName} - ${err.error}`,
           variant: 'error',
         })
-        console.error('auto-sort failed for', img, err)
+      })
+
+      if (allErrors.length > 5) {
+        addToast({
+          title: 'עוד שגיאות',
+          description: `ועוד ${allErrors.length - 5} שגיאות נוספות`,
+          variant: 'error',
+        })
       }
+
+      setImages([])
+      setCurrentIndex(0)
+    } catch (err) {
+      addToast({
+        title: 'שגיאה במיון אוטומטי',
+        description: err.message,
+        variant: 'error',
+      })
+      console.error('auto-sort failed', err)
+    } finally {
+      setIsSorting(false)
+      setSortProgress({ current: 0, total: 0 })
     }
-    setImages([])
-    setCurrentIndex(0)
-    addToast({ title: 'מיון הסתיים', description: 'כל הקבצים עובדו', variant: 'success' })
   }
 
-  const disableActions = loading || !sourcePath || !destPath || !images.length
+  const disableActions = loading || isSorting || !sourcePath || !destPath || !images.length
 
   const stats = useMemo(() => {
     if (!total) return null
@@ -312,7 +393,10 @@ const SortPage = () => {
         onFormatChange={setFormat}
       />
 
-      <ProgressBar current={sortedCount} total={total} />
+      <ProgressBar 
+        current={isSorting ? sortProgress.current : sortedCount} 
+        total={isSorting ? sortProgress.total : total} 
+      />
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-200">
         {statusText}
