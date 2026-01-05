@@ -4,7 +4,7 @@ import { io } from 'socket.io-client'
 const MAX_DATA_POINTS = 60 // 60 seconds of data (1 point per second)
 const API_BASE = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || 'http://localhost:4000'
 
-const PerformanceMonitor = ({ enabled = true }) => {
+const PerformanceMonitor = ({ enabled = true, socket: externalSocket = null }) => {
   const [stats, setStats] = useState(null)
   const [history, setHistory] = useState({
     cpu: [],
@@ -12,27 +12,46 @@ const PerformanceMonitor = ({ enabled = true }) => {
     disk: [],
   })
   const socketRef = useRef(null)
+  const ownsSocket = useRef(false) // Track if we created the socket or received it externally
+  const handlersRef = useRef(null) // Store handlers to ensure cleanup works correctly
 
   useEffect(() => {
+    console.log('[PerformanceMonitor] useEffect triggered, enabled:', enabled, 'externalSocket:', !!externalSocket, 'socket.id:', externalSocket?.id)
     if (!enabled) return
 
-    // Connect to Socket.IO
-    const socket = io(API_BASE, {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionAttempts: 5,
-    })
+    // If externalSocket is expected but not yet provided, wait for it
+    // This prevents creating a new socket when externalSocket will be provided soon
+    if (externalSocket === null || externalSocket === undefined) {
+      console.log('[PerformanceMonitor] Waiting for external socket to be provided')
+      return
+    }
 
-    socketRef.current = socket
+    let socket
+    if (externalSocket) {
+      // Use external socket provided as prop
+      socket = externalSocket
+      socketRef.current = externalSocket
+      ownsSocket.current = false
+      console.log('[PerformanceMonitor] Using external socket, id:', socket.id, 'connected:', socket.connected)
+    } else {
+      // Create our own socket only if none provided (shouldn't reach here with the check above)
+      socket = io(API_BASE, {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionAttempts: 5,
+      })
+      socketRef.current = socket
+      ownsSocket.current = true
+      console.log('[PerformanceMonitor] Created new socket')
+    }
 
-    socket.on('connect', () => {
-      console.log('[PerformanceMonitor] Socket.IO connected')
-      // Subscribe to system stats updates
+    // Define handlers - store in ref so cleanup can access them
+    const handleConnect = () => {
       socket.emit('system-stats:subscribe')
-    })
+    }
 
-    socket.on('system-stats:update', (data) => {
+    const handleUpdate = (data) => {
       setStats(data)
 
       // Update history
@@ -42,24 +61,67 @@ const PerformanceMonitor = ({ enabled = true }) => {
         const newDisk = [...prev.disk, data.disk?.percent || 0].slice(-MAX_DATA_POINTS)
         return { cpu: newCpu, memory: newMemory, disk: newDisk }
       })
-    })
+    }
 
-    socket.on('disconnect', () => {
-      console.log('[PerformanceMonitor] Socket.IO disconnected')
-    })
+    const handleDisconnect = () => {
+      // Socket disconnected
+    }
 
-    socket.on('connect_error', (err) => {
+    const handleError = (err) => {
       console.error('[PerformanceMonitor] Socket.IO connection error:', err)
-    })
+    }
+
+    // Store handlers in ref for cleanup
+    handlersRef.current = {
+      handleConnect,
+      handleUpdate,
+      handleDisconnect,
+      handleError,
+    }
+
+    // Remove any existing listeners first to avoid duplicates
+    socket.off('system-stats:update')
+    socket.off('disconnect')
+    socket.off('connect_error')
+    socket.off('connect')
+
+    // Register listeners FIRST, before subscribing (important!)
+    socket.on('system-stats:update', handleUpdate)
+    socket.on('disconnect', handleDisconnect)
+    socket.on('connect_error', handleError)
+
+    // Subscribe to system stats updates
+    // If socket is already connected, subscribe immediately
+    // Otherwise, wait for connect event
+    if (socket.connected) {
+      handleConnect()
+    } else {
+      socket.on('connect', handleConnect)
+    }
 
     return () => {
-      if (socketRef.current) {
-        socketRef.current.emit('system-stats:unsubscribe')
-        socketRef.current.disconnect()
-        socketRef.current = null
+      const handlers = handlersRef.current
+      if (socket && handlers) {
+        // Remove listeners using stored handlers
+        socket.off('connect', handlers.handleConnect)
+        socket.off('system-stats:update', handlers.handleUpdate)
+        socket.off('disconnect', handlers.handleDisconnect)
+        socket.off('connect_error', handlers.handleError)
+        
+        // Only unsubscribe, disconnect, and cleanup if we own the socket
+        if (ownsSocket.current) {
+          socket.emit('system-stats:unsubscribe')
+          socket.disconnect()
+          socketRef.current = null
+        } else {
+          // Just unsubscribe, but don't disconnect external socket
+          socket.emit('system-stats:unsubscribe')
+          socketRef.current = null
+        }
       }
+      handlersRef.current = null
     }
-  }, [enabled])
+  }, [enabled, externalSocket])
 
   if (!enabled || !stats) return null
 

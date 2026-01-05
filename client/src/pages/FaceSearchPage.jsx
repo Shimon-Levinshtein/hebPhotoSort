@@ -32,6 +32,7 @@ const FaceSearchPage = () => {
   const [filter, setFilter] = useState('')
   const [lightboxSrc, setLightboxSrc] = useState(null)
   const socketRef = useRef(null)
+  const [monitorSocket, setMonitorSocket] = useState(null)
   
   // Current time for elapsed calculation (updates every second when loading)
   const [now, setNow] = useState(Date.now())
@@ -52,6 +53,7 @@ const FaceSearchPage = () => {
       if (socketRef.current) {
         socketRef.current.disconnect()
         socketRef.current = null
+        setMonitorSocket(null)
         // Reset loading state when unmounting (but keep the data in store)
         setFaceSearchLoading(false)
         setFaceSearchProgress(null)
@@ -83,6 +85,7 @@ const FaceSearchPage = () => {
       socketRef.current.emit('face-scan:stop')
       socketRef.current.disconnect()
       socketRef.current = null
+      setMonitorSocket(null) // Clear monitor socket
       setFaceSearchLoading(false)
       setFaceSearchProgress(null)
       addToast({ 
@@ -185,6 +188,7 @@ const FaceSearchPage = () => {
         autoConnect: true
       })
       socketRef.current = socket
+      setMonitorSocket(socket) // Update state so PerformanceMonitor can use it
       
       // Add timeout handler - if connection doesn't establish within timeout
       const connectionTimeout = setTimeout(() => {
@@ -192,6 +196,7 @@ const FaceSearchPage = () => {
           console.error('[FaceSearchPage] Socket.IO connection timeout')
           socket.disconnect()
           socketRef.current = null
+          setMonitorSocket(null)
           setFaceSearchLoading(false)
           setFaceSearchProgress(null)
           setFaceSearchError('תם הזמן המתנה לחיבור לשרת')
@@ -204,8 +209,8 @@ const FaceSearchPage = () => {
         }
       }, 20000) // 20 seconds
       
-      // Handle connection
-      socket.on('connect', () => {
+      // Handle connection - check if already connected first
+      const handleConnect = () => {
         clearTimeout(connectionTimeout)
         console.log('[FaceSearchPage] Socket.IO connected')
         setFaceSearchProgress({ phase: 'init', message: 'מתחיל סריקה...' })
@@ -214,7 +219,14 @@ const FaceSearchPage = () => {
           sourcePath: pathToScan,
           concurrency: initialConcurrency
         })
-      })
+      }
+      
+      // Check if socket is already connected (shouldn't happen with forceNew, but just in case)
+      if (socket.connected) {
+        handleConnect()
+      } else {
+        socket.on('connect', handleConnect)
+      }
       
       // Handle progress updates
       socket.on('face-scan:progress', (data) => {
@@ -274,6 +286,7 @@ const FaceSearchPage = () => {
       socket.on('face-scan:done', () => {
         socket.disconnect()
         socketRef.current = null
+        setMonitorSocket(null)
         setFaceSearchLoading(false)
         setFaceSearchProgress(null)
         resolve()
@@ -283,6 +296,7 @@ const FaceSearchPage = () => {
       socket.on('face-scan:stopped', () => {
         socket.disconnect()
         socketRef.current = null
+        setMonitorSocket(null)
         setFaceSearchLoading(false)
         setFaceSearchProgress(null)
         resolve()
@@ -295,6 +309,7 @@ const FaceSearchPage = () => {
           addToast({ title: 'שגיאת סריקה', description: data.error, variant: 'error' })
           socket.disconnect()
           socketRef.current = null
+          setMonitorSocket(null)
           setFaceSearchLoading(false)
           setFaceSearchProgress(null)
           resolve()
@@ -305,10 +320,12 @@ const FaceSearchPage = () => {
       })
       
       socket.on('connect_error', (err) => {
+        clearTimeout(connectionTimeout)
         console.error('[FaceSearchPage] Socket.IO connection error:', err)
         const errorMessage = err.message || 'שגיאת חיבור לשרת'
         socket.disconnect()
         socketRef.current = null
+        setMonitorSocket(null)
         setFaceSearchLoading(false)
         setFaceSearchProgress(null)
         
@@ -520,7 +537,7 @@ const FaceSearchPage = () => {
       </div>
 
       {/* System Performance Monitor - shown during face scanning */}
-      {faceSearchLoading && <PerformanceMonitor enabled={faceSearchLoading} />}
+      {faceSearchLoading && <PerformanceMonitor enabled={faceSearchLoading} socket={monitorSocket} />}
 
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
